@@ -1,10 +1,6 @@
 import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  LineChart, Line, Legend, RadarChart, PolarGrid, PolarAngleAxis, Radar,
-  ReferenceLine
-} from 'recharts';
+import { Bar, Line, Radar } from 'react-chartjs-2';
 import { Activity, Star, BarChart2, TrendingUp, Eye, ArrowDown, ArrowRight } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { policyDistributions, generateRollouts, featureConfigs } from '../data/mockData';
@@ -15,6 +11,268 @@ const KEY_FEATURES = ['MAP', 'HR', 'LVEDP', 'pulsatility'];
 
 // Color for the single R1 (most probable) trajectory
 const R1_COLOR = '#10B981';
+
+function PolicyDistributionChart({
+  policyData,
+  hoveredBarIndex,
+  setHoveredBarIndex,
+  patient,
+  scheme,
+  gridColor,
+  subtext,
+  card,
+  border,
+  text,
+}) {
+  const data = useMemo(
+    () => ({
+      labels: policyData.map(d => d.label),
+      datasets: [
+        {
+          label: 'Probability',
+          data: policyData.map(d => d.probability),
+          borderRadius: 6,
+          borderSkipped: false,
+          backgroundColor: ctx => {
+            const i = ctx.dataIndex;
+            const d = policyData[i];
+            const isHovered = hoveredBarIndex === i;
+            const fill = d?.isMax ? scheme.good : scheme.primary;
+            if (isHovered || d?.isMax) return fill;
+            return fill.length === 7 ? `${fill}A6` : fill;
+          },
+        },
+      ],
+    }),
+    [policyData, hoveredBarIndex, scheme],
+  );
+
+  const options = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      onHover: (event, elements) => {
+        if (elements?.length) setHoveredBarIndex(elements[0].index);
+        else setHoveredBarIndex(null);
+      },
+      plugins: {
+        legend: { display: false },
+        annotation: {
+          common: { drawTime: 'beforeDatasetsDraw' },
+          annotations:
+            patient?.deviceLevel != null
+              ? {
+                  currentPump: {
+                    type: 'line',
+                    scaleID: 'x',
+                    value: `P${patient.deviceLevel}`,
+                    borderColor: scheme.accent,
+                    borderWidth: 2,
+                    borderDash: [4, 3],
+                    label: {
+                      display: true,
+                      content: 'Current',
+                      position: 'start',
+                      color: scheme.accent,
+                      font: { size: 9 },
+                    },
+                  },
+                }
+              : {},
+        },
+        tooltip: {
+          backgroundColor: card,
+          titleColor: text,
+          bodyColor: scheme.primary,
+          borderColor: border,
+          borderWidth: 1,
+          padding: 12,
+          callbacks: {
+            title: items => items[0]?.label ?? '',
+            label: ctx => {
+              const v = ctx.parsed.y;
+              return `Probability: ${((v ?? 0) * 100).toFixed(1)}%`;
+            },
+            footer: () => 'Likelihood this pump level is recommended',
+          },
+          footerColor: subtext,
+          footerFont: { size: 11 },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: subtext, font: { size: 11 } },
+          border: { display: false },
+        },
+        y: {
+          min: 0,
+          max: 1,
+          grid: { color: gridColor, borderDash: [3, 3] },
+          ticks: {
+            color: subtext,
+            font: { size: 10 },
+            callback: v => `${(v * 100).toFixed(0)}%`,
+          },
+          border: { display: false },
+        },
+      },
+    }),
+    [patient, scheme, gridColor, subtext, card, border, text, setHoveredBarIndex],
+  );
+
+  return <Bar data={data} options={options} />;
+}
+
+function TrajectoryMiniChart({ data, cfg, thr, scheme, gridColor, subtext, card, border, text, R1_COLOR }) {
+  const chartData = useMemo(
+    () => ({
+      labels: data.map(d => d.label),
+      datasets: [
+        {
+          label: cfg.label,
+          data: data.map(d => d.value),
+          borderColor: R1_COLOR,
+          borderWidth: 2.5,
+          tension: 0,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          pointBackgroundColor: R1_COLOR,
+          spanGaps: true,
+        },
+      ],
+    }),
+    [data, cfg.label, R1_COLOR],
+  );
+
+  const options = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        annotation: {
+          common: { drawTime: 'beforeDatasetsDraw' },
+          annotations: {
+            refMin: {
+              type: 'line',
+              scaleID: 'y',
+              value: thr.normalMin,
+              borderColor: `${scheme.good}55`,
+              borderDash: [3, 2],
+              borderWidth: 1,
+            },
+            refMax: {
+              type: 'line',
+              scaleID: 'y',
+              value: thr.normalMax,
+              borderColor: `${scheme.good}55`,
+              borderDash: [3, 2],
+              borderWidth: 1,
+            },
+          },
+        },
+        tooltip: {
+          backgroundColor: card,
+          titleColor: subtext,
+          bodyColor: text,
+          borderColor: border,
+          callbacks: {
+            title: items => items[0]?.label ?? '',
+            label: ctx => {
+              const v = ctx.parsed.y;
+              return `${cfg.label}: ${typeof v === 'number' ? v.toFixed(2) : '-'} ${cfg.unit}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: gridColor, borderDash: [3, 3] },
+          ticks: { color: subtext, font: { size: 9 } },
+          border: { display: false },
+        },
+        y: {
+          grid: { color: gridColor, borderDash: [3, 3] },
+          ticks: { color: subtext, font: { size: 9 } },
+          border: { display: false },
+        },
+      },
+    }),
+    [thr, scheme, gridColor, subtext, card, border, text, cfg.label, cfg.unit],
+  );
+
+  return <Line data={chartData} options={options} />;
+}
+
+function OutcomeRadarChart({ radarData, scheme, gridColor, subtext, card, border, text, R1_COLOR }) {
+  const data = useMemo(
+    () => ({
+      labels: radarData.map(d => d.feature),
+      datasets: [
+        {
+          label: 'Normal Reference',
+          data: radarData.map(d => d['Normal Midpoint']),
+          borderColor: `${scheme.primary}44`,
+          borderDash: [4, 3],
+          fill: false,
+          pointRadius: 0,
+          borderWidth: 1,
+        },
+        {
+          label: 'Projected Patient State',
+          data: radarData.map(d => d['Projected State']),
+          borderColor: R1_COLOR,
+          backgroundColor: `${R1_COLOR}2E`,
+          fill: true,
+          borderWidth: 2.5,
+        },
+      ],
+    }),
+    [radarData, scheme.primary, R1_COLOR],
+  );
+
+  const options = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: {
+          labels: { color: subtext, font: { size: 11 }, usePointStyle: true },
+        },
+        tooltip: {
+          backgroundColor: card,
+          titleColor: text,
+          bodyColor: text,
+          borderColor: border,
+          callbacks: {
+            title: items => items[0]?.label ?? '',
+            label: ctx => {
+              const v = ctx.parsed.r;
+              return `${ctx.dataset.label}: ${typeof v === 'number' ? v.toFixed(1) : '-'}%`;
+            },
+          },
+        },
+      },
+      scales: {
+        r: {
+          min: 0,
+          max: 100,
+          ticks: { display: false },
+          grid: { color: gridColor },
+          pointLabels: { color: subtext, font: { size: 11 } },
+          border: { display: false },
+        },
+      },
+    }),
+    [gridColor, subtext, card, border, text],
+  );
+
+  return <Radar data={data} options={options} />;
+}
 
 export default function PolicyEvaluation() {
   const { scheme, isDark, thresholds } = useTheme();
@@ -69,19 +327,6 @@ export default function PolicyEvaluation() {
       'Normal Midpoint': 50,
     };
   });
-
-  const PolicyBarTooltip = ({ active, payload, label }) => {
-    if (!active || !payload?.length) return null;
-    return (
-      <div style={{ background: card, borderColor: border }} className="rounded-xl border p-3 shadow-2xl">
-        <div style={{ color: text }} className="text-sm font-semibold mb-1">{label}</div>
-        <div style={{ color: scheme.primary }} className="text-xs">
-          Probability: <span className="font-mono font-semibold">{((payload[0]?.value ?? 0) * 100).toFixed(1)}%</span>
-        </div>
-        <div style={{ color: subtext }} className="text-xs mt-1">Likelihood this pump level is recommended</div>
-      </div>
-    );
-  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -185,53 +430,18 @@ export default function PolicyEvaluation() {
                 </div>
               </div>
               <div style={{ height: 280 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={policyData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={gridColor} strokeOpacity={0.6} vertical={false} />
-                    <XAxis dataKey="label" tick={{ fill: subtext, fontSize: 11 }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={v => `${(v * 100).toFixed(0)}%`} tick={{ fill: subtext, fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
-                    <ReferenceLine x={`P${patient?.deviceLevel}`} stroke={scheme.accent} strokeWidth={2} strokeDasharray="4 3"
-                      label={{ value: 'Current', position: 'top', fill: scheme.accent, fontSize: 9 }} />
-                    <Bar
-                      dataKey="probability"
-                      onMouseEnter={(_, index) => setHoveredBarIndex(index)}
-                      onMouseLeave={() => setHoveredBarIndex(null)}
-                      shape={props => {
-                        const d = policyData[props.index];
-                        const isHovered = props.index === hoveredBarIndex;
-                        const fill = d?.isMax ? scheme.good : scheme.primary;
-                        const baseOpacity = d?.isMax ? 1 : 0.65;
-                        return (
-                          <rect
-                            x={props.x}
-                            y={props.y}
-                            width={props.width}
-                            height={props.height}
-                            rx={6}
-                            ry={6}
-                            fill={fill}
-                            opacity={isHovered ? 1 : baseOpacity}
-                            style={{
-                              transformBox: 'fill-box',
-                              transformOrigin: 'bottom center',
-                              transform: isHovered ? 'scaleY(1.07)' : 'scaleY(1)',
-                              transition: 'transform 0.15s ease, opacity 0.15s ease, filter 0.15s ease',
-                              filter: isHovered
-                                ? `drop-shadow(0 0 8px ${fill}99)`
-                                : d?.isMax
-                                  ? `drop-shadow(0 0 6px ${scheme.good}66)`
-                                  : 'none',
-                            }}
-                          />
-                        );
-                      }}
-                    />
-                    <Tooltip
-                      content={<PolicyBarTooltip />}
-                      cursor={{ fill: 'transparent' }}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
+                <PolicyDistributionChart
+                  policyData={policyData}
+                  hoveredBarIndex={hoveredBarIndex}
+                  setHoveredBarIndex={setHoveredBarIndex}
+                  patient={patient}
+                  scheme={scheme}
+                  gridColor={gridColor}
+                  subtext={subtext}
+                  card={card}
+                  border={border}
+                  text={text}
+                />
               </div>
               <div className="mt-3 flex items-center gap-4">
                 <div className="flex items-center gap-1.5">
@@ -288,36 +498,18 @@ export default function PolicyEvaluation() {
                           <span style={{ color: subtext }} className="text-xs">{cfg.label} ({cfg.unit})</span>
                         </div>
                         <div style={{ height: 160 }}>
-                          <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                              <CartesianGrid strokeDasharray="3 3" stroke={gridColor} strokeOpacity={0.4} />
-                              <XAxis dataKey="label" tick={{ fill: subtext, fontSize: 9 }} axisLine={false} tickLine={false} />
-                              <YAxis tick={{ fill: subtext, fontSize: 9 }} axisLine={false} tickLine={false} width={32} />
-                              <ReferenceLine y={thr.normalMin} stroke={scheme.good + '55'} strokeDasharray="3 2" />
-                              <ReferenceLine y={thr.normalMax} stroke={scheme.good + '55'} strokeDasharray="3 2" />
-                              <Line
-                                dataKey="value"
-                                stroke={R1_COLOR}
-                                strokeWidth={2.5}
-                                dot={{ fill: R1_COLOR, r: 3, strokeWidth: 0 }}
-                                connectNulls
-                              />
-                              <Tooltip content={({ active, payload, label: l }) => {
-                                if (!active || !payload?.length) return null;
-                                return (
-                                  <div style={{ background: card, borderColor: border }} className="rounded-lg border p-2 shadow-xl text-xs">
-                                    <div style={{ color: subtext }} className="mb-1 font-mono">{l}</div>
-                                    <div className="flex items-center gap-2">
-                                      <div className="w-1.5 h-1.5 rounded-full" style={{ background: R1_COLOR }} />
-                                      <span style={{ color: text }} className="font-mono">
-                                        {cfg.label}: {Number(payload[0]?.value).toFixed(2)} {cfg.unit}
-                                      </span>
-                                    </div>
-                                  </div>
-                                );
-                              }} />
-                            </LineChart>
-                          </ResponsiveContainer>
+                          <TrajectoryMiniChart
+                            data={data}
+                            cfg={cfg}
+                            thr={thr}
+                            scheme={scheme}
+                            gridColor={gridColor}
+                            subtext={subtext}
+                            card={card}
+                            border={border}
+                            text={text}
+                            R1_COLOR={R1_COLOR}
+                          />
                         </div>
                       </div>
                     );
@@ -365,45 +557,16 @@ export default function PolicyEvaluation() {
                 </div>
               </div>
               <div style={{ height: 320 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <RadarChart data={radarData} margin={{ top: 10, right: 60, left: 60, bottom: 10 }}>
-                    <PolarGrid stroke={gridColor} />
-                    <PolarAngleAxis dataKey="feature" tick={{ fill: subtext, fontSize: 11 }} />
-                    <Radar
-                      name="Normal Reference"
-                      dataKey="Normal Midpoint"
-                      stroke={scheme.primary + '44'}
-                      fill="none"
-                      strokeWidth={1}
-                      strokeDasharray="4 3"
-                    />
-                    <Radar
-                      name="Projected Patient State"
-                      dataKey="Projected State"
-                      stroke={R1_COLOR}
-                      fill={R1_COLOR}
-                      fillOpacity={0.18}
-                      strokeWidth={2.5}
-                    />
-                    <Legend formatter={v => <span style={{ color: subtext, fontSize: 11 }}>{v}</span>} />
-                    <Tooltip content={({ active, payload, label: l }) => {
-                      if (!active || !payload?.length) return null;
-                      return (
-                        <div style={{ background: card, borderColor: border }} className="rounded-xl border p-3 shadow-xl text-xs">
-                          <div style={{ color: text }} className="font-semibold mb-2">{l}</div>
-                          {payload.map(p => (
-                            <div key={p.name} className="flex justify-between gap-4">
-                              <span style={{ color: p.stroke ?? subtext }}>{p.name}</span>
-                              <span style={{ color: text }} className="font-mono">
-                                {typeof p.value === 'number' ? p.value.toFixed(1) : '-'}%
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    }} />
-                  </RadarChart>
-                </ResponsiveContainer>
+                <OutcomeRadarChart
+                  radarData={radarData}
+                  scheme={scheme}
+                  gridColor={gridColor}
+                  subtext={subtext}
+                  card={card}
+                  border={border}
+                  text={text}
+                  R1_COLOR={R1_COLOR}
+                />
               </div>
 
               {/* Outcome summary cards */}

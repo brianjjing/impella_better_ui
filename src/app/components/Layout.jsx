@@ -66,7 +66,8 @@ export default function Layout() {
       try {
         setPatientsLoading(true);
         setPatientsError(null);
-        const res = await fetch('http://localhost:8000/api/patients');
+        const base = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? '' : 'http://localhost:8000');
+        const res = await fetch(`${base}/api/patients`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!cancelled) {
