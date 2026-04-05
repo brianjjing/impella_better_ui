@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Line } from 'react-chartjs-2';
 import { Sliders, Play, TrendingUp, TrendingDown, Minus } from 'lucide-react';
@@ -21,6 +21,18 @@ const emptyPumpSequence = () => /** @type {(number|null)[]} */ ([null, null, nul
 /** Vivid amber for forecast series (high contrast on dark/light charts) */
 const FORECAST_COLOR = '#FACC15';
 
+function forecastNumericClose(a, b) {
+  if (typeof a !== 'number' || typeof b !== 'number') return a === b;
+  return Math.abs(a - b) < 0.015;
+}
+
+/** Hemodynamic values cannot go below 0 when dragging forecast points. */
+function clampForecastDragValue(v) {
+  const n = Number(Number(v).toFixed(2));
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, n);
+}
+
 function SimulatorFeatureChart({
   combinedData,
   feature,
@@ -33,7 +45,14 @@ function SimulatorFeatureChart({
   card,
   border,
   scheme,
+  histLength,
+  forecastDragEnabled,
+  onForecastPointDrag,
 }) {
+  const chartRef = useRef(/** @type {import('chart.js').Chart | null} */ (null));
+  const dragRef = useRef(/** @type {{ forecastStepIndex: number; pointerId: number } | null} */ (null));
+  const [isDragging, setIsDragging] = useState(false);
+
   const labels = useMemo(() => combinedData.map(r => r.label), [combinedData]);
 
   const { datasets, annotations } = useMemo(() => {
@@ -78,7 +97,8 @@ function SimulatorFeatureChart({
           tension: 0,
           spanGaps: true,
           pointRadius: 6,
-          pointHoverRadius: 6,
+          pointHoverRadius: forecastDragEnabled ? 14 : 6,
+          pointHitRadius: forecastDragEnabled ? 20 : 6,
           pointBackgroundColor: ctx => {
             const v = ctx.raw;
             if (v == null || typeof v !== 'number') return 'transparent';
@@ -126,7 +146,80 @@ function SimulatorFeatureChart({
       datasets: foreDs ? [histDs, foreDs] : [histDs],
       annotations: ann,
     };
-  }, [combinedData, feature, thr, hasResult, lastHistLabel, labels, isDark, subtext]);
+  }, [combinedData, feature, thr, hasResult, lastHistLabel, labels, isDark, subtext, forecastDragEnabled]);
+
+  useEffect(() => {
+    if (!forecastDragEnabled || !onForecastPointDrag) return;
+    const chart = chartRef.current;
+    if (!chart) return;
+    const canvas = chart.canvas;
+    const hl = histLength;
+
+    const valueFromEvent = (/** @type {PointerEvent} */ e) => {
+      const c = chartRef.current;
+      if (!c?.scales?.y) return null;
+      const area = c.chartArea;
+      const rect = canvas.getBoundingClientRect();
+      const yPx = e.clientY - rect.top;
+      const clamped = Math.max(area.top, Math.min(area.bottom, yPx));
+      const v = c.scales.y.getValueForPixel(clamped);
+      return Number.isFinite(v) ? v : null;
+    };
+
+    const onPointerDown = (/** @type {PointerEvent} */ e) => {
+      const c = chartRef.current;
+      if (!c) return;
+      const els = c.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+      if (!els.length) return;
+      const el = els[0];
+      if (el.datasetIndex !== 1 || el.index < hl) return;
+      const forecastStepIndex = el.index - hl;
+      if (forecastStepIndex < 0 || forecastStepIndex > 5) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      dragRef.current = { forecastStepIndex, pointerId: e.pointerId };
+      setIsDragging(true);
+      const v = valueFromEvent(e);
+      if (v != null) onForecastPointDrag(feature, forecastStepIndex, v);
+    };
+
+    const onPointerMove = (/** @type {PointerEvent} */ e) => {
+      if (!dragRef.current) return;
+      e.preventDefault();
+      const v = valueFromEvent(e);
+      if (v != null) onForecastPointDrag(feature, dragRef.current.forecastStepIndex, v);
+    };
+
+    const endDrag = (/** @type {PointerEvent} */ e) => {
+      if (!dragRef.current) return;
+      try {
+        if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      dragRef.current = null;
+      setIsDragging(false);
+    };
+
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+    canvas.style.touchAction = 'none';
+
+    return () => {
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerup', endDrag);
+      canvas.removeEventListener('pointercancel', endDrag);
+      canvas.style.touchAction = '';
+    };
+  }, [forecastDragEnabled, onForecastPointDrag, histLength, feature, hasResult, labels.length, combinedData.length]);
 
   const options = useMemo(
     () => ({
@@ -141,6 +234,7 @@ function SimulatorFeatureChart({
           annotations,
         },
         tooltip: {
+          enabled: !isDragging,
           mode: 'index',
           intersect: false,
           filter: item => item.raw != null,
@@ -187,10 +281,19 @@ function SimulatorFeatureChart({
         },
       },
     }),
-    [annotations, card, border, subtext, gridColor, scheme.primary, thr],
+    [annotations, card, border, subtext, gridColor, scheme.primary, thr, isDragging],
   );
 
-  return <Line data={{ labels, datasets }} options={options} />;
+  return (
+    <Line
+      ref={chartRef}
+      data={{ labels, datasets }}
+      options={options}
+      style={{
+        cursor: forecastDragEnabled ? (isDragging ? 'ns-resize' : 'grab') : undefined,
+      }}
+    />
+  );
 }
 
 export default function Simulator() {
@@ -204,7 +307,11 @@ export default function Simulator() {
   const [isRunning, setIsRunning] = useState(false);
   const [hasResult, setHasResult] = useState(false);
   const [forecastRows, setForecastRows] = useState([]);
+  /** Snapshot after last successful API run — used for Reset. */
+  const [baselineForecastRows, setBaselineForecastRows] = useState(/** @type {typeof forecastRows} */ ([]));
   const [forecastError, setForecastError] = useState(null);
+  /** P-levels (T+1…T+6) for the forecast drawn on the chart — updated only after a successful Run. */
+  const [lastRunPumpSequence, setLastRunPumpSequence] = useState(/** @type {number[] | null} */ (null));
   const [selectedGroup, setSelectedGroup] = useState(0);
 
   const canRunForecast = useMemo(
@@ -216,14 +323,25 @@ export default function Simulator() {
     setPumpSequence(emptyPumpSequence());
     setHasResult(false);
     setForecastRows([]);
+    setBaselineForecastRows([]);
     setForecastError(null);
+    setLastRunPumpSequence(null);
   }, [selectedPatientId, patient?.deviceLevel]);
 
+  const pumpLevelControlsRef = useRef(/** @type {HTMLDivElement | null} */ (null));
+  /** Native `<select>` wheel needs non-passive `preventDefault` (React onWheel is often passive). */
   useEffect(() => {
-    setHasResult(false);
-    setForecastRows([]);
-    setForecastError(null);
-  }, [pumpSequence]);
+    const root = pumpLevelControlsRef.current;
+    if (!root) return;
+    const handler = (/** @type {WheelEvent} */ e) => {
+      e.preventDefault();
+    };
+    const selects = root.querySelectorAll('select[data-pump-wheel-guard]');
+    selects.forEach(el => el.addEventListener('wheel', handler, { passive: false }));
+    return () => {
+      selects.forEach(el => el.removeEventListener('wheel', handler));
+    };
+  }, []);
 
   const bg = isDark ? '#080E1A' : '#F4F6FA';
   const card = isDark ? '#0C1526' : '#FFFFFF';
@@ -238,9 +356,57 @@ export default function Simulator() {
     return forecastRows;
   }, [hasResult, forecastRows]);
 
-  const sequenceSummary = canRunForecast
-    ? pumpSequence.map(p => `P${p}`).join(' → ')
-    : null;
+  const forecastPumpLegend = useMemo(() => {
+    if (!lastRunPumpSequence || lastRunPumpSequence.length !== 6) {
+      return null;
+    }
+    return lastRunPumpSequence.map(p => `P${p}`).join(' → ');
+  }, [lastRunPumpSequence]);
+
+  const handleForecastPointDrag = useCallback(
+    (/** @type {string} */ feat, /** @type {number} */ forecastStepIndex, /** @type {number} */ value) => {
+      const rounded = clampForecastDragValue(value);
+      setForecastRows(prev => {
+        if (baselineForecastRows.length !== 6 || prev.length !== 6 || !prev[forecastStepIndex]) {
+          return prev.map((row, i) =>
+            i === forecastStepIndex && row ? { ...row, [feat]: rounded } : row,
+          );
+        }
+        const baseAt = baselineForecastRows[forecastStepIndex][feat];
+        if (typeof baseAt !== 'number') {
+          return prev.map((row, i) => (i === forecastStepIndex ? { ...row, [feat]: rounded } : row));
+        }
+        const delta = rounded - baseAt;
+        return prev.map((row, i) => {
+          if (i < forecastStepIndex) return row;
+          const b = baselineForecastRows[i][feat];
+          if (typeof b !== 'number') return row;
+          return { ...row, [feat]: clampForecastDragValue(b + delta) };
+        });
+      });
+    },
+    [baselineForecastRows],
+  );
+
+  const resetFeatureToBaseline = useCallback((/** @type {string} */ feat) => {
+    setForecastRows(prev => {
+      if (baselineForecastRows.length !== 6 || prev.length !== 6) return prev;
+      return prev.map((row, i) => ({
+        ...row,
+        [feat]: baselineForecastRows[i][feat],
+      }));
+    });
+  }, [baselineForecastRows]);
+
+  const featureHasManualEdits = useCallback(
+    (/** @type {string} */ feat) => {
+      if (baselineForecastRows.length !== 6 || forecastRows.length !== 6) return false;
+      return forecastRows.some(
+        (row, i) => !forecastNumericClose(row[feat], baselineForecastRows[i][feat]),
+      );
+    },
+    [baselineForecastRows, forecastRows],
+  );
 
   const combinedData = useMemo(() => {
     if (!patient) return [];
@@ -302,12 +468,17 @@ export default function Simulator() {
       if (!Array.isArray(data.forecast) || data.forecast.length !== 6) {
         throw new Error('Invalid forecast response');
       }
-      setForecastRows(data.forecast);
+      const rows = data.forecast;
+      setForecastRows(rows);
+      setBaselineForecastRows(rows.map((r) => ({ ...r })));
+      setLastRunPumpSequence(pumpSequence.map(Number));
       setHasResult(true);
     } catch (e) {
       setForecastError(e instanceof Error ? e.message : 'Forecast failed');
       setHasResult(false);
       setForecastRows([]);
+      setBaselineForecastRows([]);
+      setLastRunPumpSequence(null);
     } finally {
       setIsRunning(false);
     }
@@ -358,16 +529,20 @@ export default function Simulator() {
                 {g.label}
               </button>
             ))}
-            {hasResult && sequenceSummary && (
+            {hasResult && forecastPumpLegend && (
               <div className="ml-auto flex flex-col items-end gap-1 text-xs max-w-[min(100%,20rem)]">
                 <div className="flex items-center gap-1.5">
                   <div className="w-5 h-1 rounded flex-shrink-0" style={{ background: scheme.primary, opacity: 0.6 }} />
                   <span style={{ color: subtext }}>Historical (P{currentLevel})</span>
                 </div>
-                <div className="flex items-start gap-1.5 text-right">
-                  <div className="w-5 h-1 rounded mt-0.5 flex-shrink-0" style={{ background: FORECAST_COLOR }} />
+                <div className="flex items-center gap-1.5 text-right">
+                  <div
+                    className="w-5 h-1 rounded flex-shrink-0"
+                    style={{ background: FORECAST_COLOR }}
+                    aria-hidden
+                  />
                   <span style={{ color: FORECAST_COLOR }} className="font-medium leading-snug break-words">
-                    Forecast: {sequenceSummary}
+                    Forecast: {forecastPumpLegend}
                   </span>
                 </div>
               </div>
@@ -417,20 +592,51 @@ export default function Simulator() {
                   )}
                 </div>
 
-                <div className="px-2 py-3" style={{ height: 170 }}>
-                  <SimulatorFeatureChart
-                    combinedData={combinedData}
-                    feature={feature}
-                    thr={thr}
-                    hasResult={hasResult}
-                    lastHistLabel={lastHistLabel}
-                    isDark={isDark}
-                    gridColor={gridColor}
-                    subtext={subtext}
-                    card={card}
-                    border={border}
-                    scheme={scheme}
-                  />
+                <div className="flex flex-col px-2 pt-3 pb-2">
+                  <div className="relative w-full" style={{ height: 170 }}>
+                    <SimulatorFeatureChart
+                      combinedData={combinedData}
+                      feature={feature}
+                      thr={thr}
+                      hasResult={hasResult}
+                      lastHistLabel={lastHistLabel}
+                      isDark={isDark}
+                      gridColor={gridColor}
+                      subtext={subtext}
+                      card={card}
+                      border={border}
+                      scheme={scheme}
+                      histLength={patient?.timeline?.length ?? 6}
+                      forecastDragEnabled={hasResult && baselineForecastRows.length === 6}
+                      onForecastPointDrag={handleForecastPointDrag}
+                    />
+                  </div>
+                  {featureHasManualEdits(feature) && (
+                    <div
+                      className="flex justify-end pr-1"
+                      style={{
+                        /* ~1/3 of former pt-10 (~40px); % is of containing block width (CSS) */
+                        paddingTop: '3.33%',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => resetFeatureToBaseline(feature)}
+                        className="cursor-pointer font-semibold rounded hover:opacity-90 transition-opacity leading-none"
+                        style={{
+                          backgroundColor: '#FFFFFF',
+                          border: `1px solid ${border}`,
+                          color: isDark ? bg : '#080E1A',
+                          padding: '2px 7px',
+                          fontSize: '11px',
+                          lineHeight: 1.25,
+                          boxShadow: isDark ? '0 1px 2px rgba(0,0,0,0.25)' : '0 1px 2px rgba(15,23,42,0.08)',
+                        }}
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             );
@@ -489,13 +695,14 @@ export default function Simulator() {
                 <p style={{ color: subtext }} className="text-[10px] opacity-80 mb-2 leading-snug">
                   Set P2–P9 for each hour. Type a number or use the menu.
                 </p>
-                <div className="space-y-2 mb-3">
+                <div ref={pumpLevelControlsRef} className="space-y-2 mb-3">
                   {[0, 1, 2, 3, 4, 5].map(i => (
                     <div key={i} className="flex items-center gap-2">
                       <span style={{ color: subtext }} className="text-[10px] font-mono w-9 flex-shrink-0">
                         T+{i + 1}h
                       </span>
                       <select
+                        data-pump-wheel-guard
                         aria-label={`Pump level at T+${i + 1} hour`}
                         value={pumpSequence[i] == null ? '' : String(pumpSequence[i])}
                         onChange={e => setLevelAt(i, e.target.value)}
@@ -513,16 +720,17 @@ export default function Simulator() {
                         ))}
                       </select>
                       <input
-                        type="number"
-                        min={2}
-                        max={9}
-                        step={1}
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        autoComplete="off"
+                        maxLength={1}
                         placeholder="—"
                         aria-label={`Type pump level T+${i + 1}h`}
                         value={pumpSequence[i] ?? ''}
                         onChange={e => setLevelAt(i, e.target.value)}
                         style={{ background: muted, borderColor: border, color: text }}
-                        className="w-14 flex-shrink-0 rounded-lg border px-1.5 py-1.5 text-center text-xs font-mono outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                        className="w-14 flex-shrink-0 rounded-lg border px-1.5 py-1.5 text-center text-xs font-mono outline-none"
                       />
                     </div>
                   ))}

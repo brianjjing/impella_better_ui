@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 150" fill="none">
+  <title>SmartWean — anatomical heart</title>
+  <defs>
+    <radialGradient id="lvGrad" cx="50%" cy="50%">
+      <stop offset="0%" stop-color="#0D9488" stop-opacity="0.6" />
+      <stop offset="100%" stop-color="#0D9488" stop-opacity="0.1" />
+    </radialGradient>
+  </defs>
+  <!-- Heart silhouette (matches HeartLevel2 AnatomicalHeart) -->
+  <path
+    d="M80 138 C80 138 18 95 18 52 C18 35 30 22 47 22 C58 22 67 28 72 36 L80 48 L88 36 C93 28 102 22 113 22 C130 22 142 35 142 52 C142 95 80 138 80 138Z"
+    fill="url(#lvGrad)"
+    stroke="#0D9488"
+    stroke-width="1.5"
+    stroke-linejoin="round"
+  />
+  <!-- Septum guide -->
+  <path d="M80 48 L80 125" stroke="#475569" stroke-width="1" stroke-dasharray="3 2" opacity="0.65" />
+  <!-- LV / RV chambers (stable / good palette) -->
+  <ellipse cx="94" cy="85" rx="22" ry="32" fill="#0D9488" opacity="0.35" />
+  <ellipse cx="66" cy="82" rx="18" ry="28" fill="#0D9488" opacity="0.28" />
+  <!-- RV outflow tract -->
+  <path
+    d="M88 36 C88 28 92 18 92 10 C92 6 95 4 98 4 C104 4 108 8 108 14 C108 22 104 28 100 32"
+    stroke="#0D9488"
+    stroke-width="3"
+    stroke-linecap="round"
+    fill="none"
+  />
+  <!-- LV / systemic arc (accent) -->
+  <path
+    d="M72 32 C72 24 68 14 60 10 C56 8 52 10 50 14"
+    stroke="#06B6D4"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    fill="none"
+  />
+  <!-- Impella: inflow line + pump head -->
+  <line x1="80" y1="4" x2="80" y2="110" stroke="#F8FAFC" stroke-width="1.5" opacity="0.88" />
+  <circle cx="80" cy="80" r="4" fill="none" stroke="#F8FAFC" stroke-width="1.2" opacity="0.88" />
+  <circle cx="80" cy="80" r="1.5" fill="#F8FAFC" opacity="0.92" />
+  <!-- Pulsatility markers -->
+  <circle cx="60" cy="142" r="1.5" fill="#0D9488" opacity="0.75" />
+  <circle cx="70" cy="140" r="1.5" fill="#0D9488" opacity="0.75" />
+  <circle cx="80" cy="142" r="1.5" fill="#0D9488" opacity="0.75" />
+  <circle cx="90" cy="140" r="1.5" fill="#0D9488" opacity="0.75" />
+  <text x="104" y="92" fill="#94A3B8" font-size="7" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif">LV</text>
+  <text x="58" y="89" fill="#94A3B8" font-size="7" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif">RV</text>
+</svg>
