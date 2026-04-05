@@ -2,9 +2,10 @@ import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Line } from 'react-chartjs-2';
 import { Sliders, Play, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { useTheme, getFeatureStatus } from '../context/ThemeContext';
-import { featureConfigs, featureKeys, generateForecast } from '../data/mockData';
-import { CHART_STATUS, chartStatusColor } from '../constants/chartStatusColors';
+import { useTheme } from '../context/ThemeContext';
+import { featureConfigs, featureKeys } from '../data/mockData';
+import { CHART_STATUS } from '../constants/chartStatusColors';
+import { continuousSeverityColor } from '../lib/continuousSeverityColor';
 import { useLayoutContext } from '../components/Layout';
 
 const FEATURE_GROUPS = [
@@ -13,17 +14,12 @@ const FEATURE_GROUPS = [
   { label: 'Pump Metrics', keys: ['pumpSpeed', 'motorCurrent', 'pumpFlow', 'tauLV'] },
 ];
 
+const P_LEVELS = [2, 3, 4, 5, 6, 7, 8, 9];
+
+const emptyPumpSequence = () => /** @type {(number|null)[]} */ ([null, null, null, null, null, null]);
+
 /** Vivid amber for forecast series (high contrast on dark/light charts) */
 const FORECAST_COLOR = '#FACC15';
-
-function severitySegmentBorderColor(thr) {
-  return ctx => {
-    if (ctx.p0.skip || ctx.p1.skip) return undefined;
-    const y = ctx.p1.parsed.y;
-    if (y == null || typeof y !== 'number' || Number.isNaN(y)) return undefined;
-    return chartStatusColor(getFeatureStatus(y, thr));
-  };
-}
 
 function SimulatorFeatureChart({
   combinedData,
@@ -48,30 +44,24 @@ function SimulatorFeatureChart({
       label: 'Historical',
       isForecast: false,
       data: histData,
-      borderColor: CHART_STATUS.normal,
-      borderWidth: 1.5,
+      borderWidth: 0,
+      severityThreshold: thr,
+      gradientLineWidth: 1.5,
       tension: 0,
-      segment: {
-        borderColor: severitySegmentBorderColor(thr),
-        borderWidth: ctx => {
-          if (ctx.p0.skip || ctx.p1.skip) return undefined;
-          return 1.5;
-        },
-      },
       spanGaps: true,
       pointRadius: 5,
       pointHoverRadius: 5,
       pointBackgroundColor: ctx => {
         const v = ctx.raw;
         if (v == null || typeof v !== 'number') return 'transparent';
-        return chartStatusColor(getFeatureStatus(v, thr));
+        return continuousSeverityColor(v, thr);
       },
       pointBorderColor: isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)',
       pointBorderWidth: 2.25,
       pointHoverBackgroundColor: ctx => {
         const v = ctx.raw;
         if (v == null || typeof v !== 'number') return 'transparent';
-        return chartStatusColor(getFeatureStatus(v, thr));
+        return continuousSeverityColor(v, thr);
       },
       pointHoverBorderColor: isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)',
       pointHoverBorderWidth: 2.25,
@@ -82,30 +72,24 @@ function SimulatorFeatureChart({
           label: 'Forecast',
           isForecast: true,
           data: foreData,
-          borderColor: CHART_STATUS.normal,
-          borderWidth: 3,
+          borderWidth: 0,
+          severityThreshold: thr,
+          gradientLineWidth: 3,
           tension: 0,
-          segment: {
-            borderColor: severitySegmentBorderColor(thr),
-            borderWidth: ctx => {
-              if (ctx.p0.skip || ctx.p1.skip) return undefined;
-              return 3;
-            },
-          },
           spanGaps: true,
           pointRadius: 6,
           pointHoverRadius: 6,
           pointBackgroundColor: ctx => {
             const v = ctx.raw;
             if (v == null || typeof v !== 'number') return 'transparent';
-            return chartStatusColor(getFeatureStatus(v, thr));
+            return continuousSeverityColor(v, thr);
           },
           pointBorderColor: isDark ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.9)',
           pointBorderWidth: 2.25,
           pointHoverBackgroundColor: ctx => {
             const v = ctx.raw;
             if (v == null || typeof v !== 'number') return 'transparent';
-            return chartStatusColor(getFeatureStatus(v, thr));
+            return continuousSeverityColor(v, thr);
           },
           pointHoverBorderColor: isDark ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.9)',
           pointHoverBorderWidth: 2.25,
@@ -184,7 +168,7 @@ function SimulatorFeatureChart({
               if (typeof v !== 'number') {
                 return { borderColor: scheme.primary, backgroundColor: scheme.primary };
               }
-              const c = chartStatusColor(getFeatureStatus(v, thr));
+              const c = continuousSeverityColor(v, thr);
               return { borderColor: c, backgroundColor: c };
             },
           },
@@ -216,15 +200,30 @@ export default function Simulator() {
   const patient = patients.find(p => p.id === selectedPatientId);
   const currentLevel = patient?.deviceLevel ?? 5;
 
-  const [pumpLevel, setPumpLevel] = useState(currentLevel);
+  const [pumpSequence, setPumpSequence] = useState(emptyPumpSequence);
   const [isRunning, setIsRunning] = useState(false);
   const [hasResult, setHasResult] = useState(false);
+  const [forecastRows, setForecastRows] = useState([]);
+  const [forecastError, setForecastError] = useState(null);
   const [selectedGroup, setSelectedGroup] = useState(0);
 
+  const canRunForecast = useMemo(
+    () => pumpSequence.every(v => typeof v === 'number' && v >= 2 && v <= 9),
+    [pumpSequence],
+  );
+
   useEffect(() => {
-    setPumpLevel(patient?.deviceLevel ?? 5);
+    setPumpSequence(emptyPumpSequence());
     setHasResult(false);
+    setForecastRows([]);
+    setForecastError(null);
   }, [selectedPatientId, patient?.deviceLevel]);
+
+  useEffect(() => {
+    setHasResult(false);
+    setForecastRows([]);
+    setForecastError(null);
+  }, [pumpSequence]);
 
   const bg = isDark ? '#080E1A' : '#F4F6FA';
   const card = isDark ? '#0C1526' : '#FFFFFF';
@@ -234,13 +233,14 @@ export default function Simulator() {
   const muted = isDark ? '#1E293B' : '#F1F5F9';
   const gridColor = isDark ? '#1A2740' : '#E2E8F0';
 
-  const effectiveLevel = pumpLevel;
-  const delta = effectiveLevel - currentLevel;
-
   const forecast = useMemo(() => {
-    if (!hasResult || !patient) return [];
-    return generateForecast(patient, effectiveLevel);
-  }, [patient, effectiveLevel, hasResult]);
+    if (!hasResult || !forecastRows.length) return [];
+    return forecastRows;
+  }, [hasResult, forecastRows]);
+
+  const sequenceSummary = canRunForecast
+    ? pumpSequence.map(p => `P${p}`).join(' → ')
+    : null;
 
   const combinedData = useMemo(() => {
     if (!patient) return [];
@@ -261,9 +261,56 @@ export default function Simulator() {
     });
   }, [patient, forecast, hasResult]);
 
-  const runSimulation = () => {
+  const setLevelAt = (index, raw) => {
+    if (raw === '' || raw == null) {
+      setPumpSequence(prev => {
+        const n = [...prev];
+        n[index] = null;
+        return n;
+      });
+      return;
+    }
+    const v = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
+    if (!Number.isFinite(v)) return;
+    const clamped = Math.min(9, Math.max(2, v));
+    setPumpSequence(prev => {
+      const n = [...prev];
+      n[index] = clamped;
+      return n;
+    });
+  };
+
+  const runSimulation = async () => {
+    if (!canRunForecast || !patient) return;
+    const base = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? '' : 'http://localhost:8000');
     setIsRunning(true);
-    setTimeout(() => { setIsRunning(false); setHasResult(true); }, 1100);
+    setForecastError(null);
+    try {
+      const res = await fetch(`${base}/api/forecast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          patient_id: patient.id,
+          p_levels: pumpSequence.map(Number),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = data?.detail ?? res.statusText;
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+      }
+      if (!Array.isArray(data.forecast) || data.forecast.length !== 6) {
+        throw new Error('Invalid forecast response');
+      }
+      setForecastRows(data.forecast);
+      setHasResult(true);
+    } catch (e) {
+      setForecastError(e instanceof Error ? e.message : 'Forecast failed');
+      setHasResult(false);
+      setForecastRows([]);
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   const getTrend = feature => {
@@ -311,16 +358,16 @@ export default function Simulator() {
                 {g.label}
               </button>
             ))}
-            {hasResult && (
-              <div className="ml-auto flex items-center gap-4 text-xs">
+            {hasResult && sequenceSummary && (
+              <div className="ml-auto flex flex-col items-end gap-1 text-xs max-w-[min(100%,20rem)]">
                 <div className="flex items-center gap-1.5">
-                  <div className="w-5 h-1 rounded" style={{ background: scheme.primary, opacity: 0.6 }} />
+                  <div className="w-5 h-1 rounded flex-shrink-0" style={{ background: scheme.primary, opacity: 0.6 }} />
                   <span style={{ color: subtext }}>Historical (P{currentLevel})</span>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-5 h-1 rounded" style={{ background: FORECAST_COLOR }} />
-                  <span style={{ color: FORECAST_COLOR }} className="font-medium">
-                    Forecast (P{effectiveLevel}{delta === 0 ? ' — current' : delta > 0 ? ` +${delta}` : ` ${delta}`})
+                <div className="flex items-start gap-1.5 text-right">
+                  <div className="w-5 h-1 rounded mt-0.5 flex-shrink-0" style={{ background: FORECAST_COLOR }} />
+                  <span style={{ color: FORECAST_COLOR }} className="font-medium leading-snug break-words">
+                    Forecast: {sequenceSummary}
                   </span>
                 </div>
               </div>
@@ -396,24 +443,23 @@ export default function Simulator() {
               style={{ borderColor: scheme.primary + '44', background: scheme.primary + '0A' }}
               className="rounded-xl border p-6 text-center">
               <div style={{ color: scheme.primary }} className="text-sm font-semibold mb-2">
-                Ready to Simulate P{pumpLevel}
-                {delta === 0 && <span style={{ color: subtext }} className="ml-2 text-xs font-normal">(current level)</span>}
+                6-hour pump sequence
               </div>
               <p style={{ color: subtext }} className="text-xs">
-                Click "Run Forecast" in the panel to generate the next 6-hour prediction
+                Choose P2–P9 for each hour (T+1h … T+6h) in the panel, then run forecast.
               </p>
             </motion.div>
           )}
         </div>
 
         {/* Right Control Panel */}
-        <div className="flex-shrink-0 p-2 pl-0" style={{ width: 248 }}>
+        <div className="flex-shrink-0 p-2 pl-0 w-[min(100%,20rem)] min-w-[17.5rem]">
           <div style={{ background: card, borderColor: border }} className="h-full rounded-2xl border flex flex-col overflow-hidden">
-            <div style={{ borderColor: border }} className="border-b px-4 py-3">
+            {/* <div style={{ borderColor: border }} className="border-b px-4 py-3">
               <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold">
                 Simulator Controls
               </div>
-            </div>
+            </div> */}
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {/* Current state */}
@@ -435,91 +481,83 @@ export default function Simulator() {
                 </div>
               </div>
 
-              {/* Pump level selector */}
+              {/* Hourly P-level sequence T+1 … T+6 */}
               <div>
-                <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold mb-2">Simulated Level</div>
-                <div className="grid grid-cols-4 gap-1.5 mb-3">
-                  {[2, 3, 4, 5, 6, 7, 8, 9].map(lvl => {
-                    const isActive = effectiveLevel === lvl;
-                    const isCurrent = currentLevel === lvl;
-                    const lvlColor =
-                      lvl > currentLevel ? CHART_STATUS.warning : lvl < currentLevel ? CHART_STATUS.normal : scheme.primary;
-                    return (
-                      <button
-                        key={lvl}
-                        onClick={() => { setPumpLevel(lvl); setHasResult(false); }}
-                        style={{
-                          background: isActive ? lvlColor + '33' : muted,
-                          borderColor: isActive ? lvlColor : border,
-                          color: isActive ? lvlColor : subtext,
-                        }}
-                        className="py-2 rounded-lg border text-xs font-mono font-semibold transition-all relative">
-                        P{lvl}
-                        {isCurrent && (
-                          <div className="absolute -top-1 -right-1 w-2 h-2 rounded-full border border-current"
-                            style={{ background: scheme.accent }} />
-                        )}
-                      </button>
-                    );
-                  })}
+                <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold mb-2">
+                  Pump Level Simulator (Hourly)
                 </div>
-
-                <AnimatePresence mode="wait">
-                  {delta !== 0 ? (
-                    <motion.div
-                      key="delta"
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      style={{
-                        background: (delta > 0 ? CHART_STATUS.warning : CHART_STATUS.normal) + '33',
-                        borderColor: (delta > 0 ? CHART_STATUS.warning : CHART_STATUS.normal) + '88',
-                        color: delta > 0 ? CHART_STATUS.warning : CHART_STATUS.normal,
-                      }}
-                      className="rounded-lg border p-2.5 text-xs flex items-center gap-2 mb-3">
-                      {delta > 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-                      <div>
-                        <div className="font-semibold">
-                          {delta > 0
-                            ? `Increase by ${delta} level${Math.abs(delta) > 1 ? 's' : ''}`
-                            : `Decrease by ${Math.abs(delta)} level${Math.abs(delta) > 1 ? 's' : ''}`}
-                        </div>
-                        <div className="opacity-70 mt-0.5">
-                          {delta > 0 ? 'More support — monitor hemodynamics' : 'Weaning down — watch for decompensation'}
-                        </div>
-                      </div>
-                    </motion.div>
-                  ) : (
-                    <motion.div
-                      key="same"
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      style={{ background: scheme.primary + '12', borderColor: scheme.primary + '44', color: scheme.primary }}
-                      className="rounded-lg border p-2.5 text-xs flex items-center gap-2 mb-3">
-                      <Minus size={12} />
-                      <div>
-                        <div className="font-semibold">Maintain P{pumpLevel}</div>
-                        <div className="opacity-70 mt-0.5">Running at current support level</div>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                <p style={{ color: subtext }} className="text-[10px] opacity-80 mb-2 leading-snug">
+                  Set P2–P9 for each hour. Type a number or use the menu.
+                </p>
+                <div className="space-y-2 mb-3">
+                  {[0, 1, 2, 3, 4, 5].map(i => (
+                    <div key={i} className="flex items-center gap-2">
+                      <span style={{ color: subtext }} className="text-[10px] font-mono w-9 flex-shrink-0">
+                        T+{i + 1}h
+                      </span>
+                      <select
+                        aria-label={`Pump level at T+${i + 1} hour`}
+                        value={pumpSequence[i] == null ? '' : String(pumpSequence[i])}
+                        onChange={e => setLevelAt(i, e.target.value)}
+                        style={{
+                          background: muted,
+                          borderColor: border,
+                          color: text,
+                        }}
+                        className="flex-1 min-w-0 rounded-lg border px-2 py-1.5 text-xs font-mono outline-none focus:ring-1 focus:ring-offset-0">
+                        <option value="">—</option>
+                        {P_LEVELS.map(lvl => (
+                          <option key={lvl} value={lvl}>
+                            P{lvl}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min={2}
+                        max={9}
+                        step={1}
+                        placeholder="—"
+                        aria-label={`Type pump level T+${i + 1}h`}
+                        value={pumpSequence[i] ?? ''}
+                        onChange={e => setLevelAt(i, e.target.value)}
+                        style={{ background: muted, borderColor: border, color: text }}
+                        className="w-14 flex-shrink-0 rounded-lg border px-1.5 py-1.5 text-center text-xs font-mono outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      />
+                    </div>
+                  ))}
+                </div>
+                {!canRunForecast && (
+                  <p style={{ color: subtext }} className="text-[10px] mb-3 opacity-75">
+                    Select all six hours to enable Run forecast.
+                  </p>
+                )}
               </div>
 
               {/* Run button */}
               <button
+                type="button"
                 onClick={runSimulation}
-                disabled={isRunning}
-                style={{ background: scheme.primary, color: 'white', opacity: isRunning ? 0.7 : 1 }}
-                className="w-full py-2.5 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all">
+                disabled={isRunning || !canRunForecast}
+                style={{
+                  background: canRunForecast && !isRunning ? scheme.primary : muted,
+                  color: canRunForecast && !isRunning ? 'white' : subtext,
+                  borderColor: border,
+                  opacity: isRunning ? 0.85 : 1,
+                }}
+                className="w-full py-2.5 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all border">
                 <motion.div
                   animate={{ rotate: isRunning ? 360 : 0 }}
                   transition={{ repeat: isRunning ? Infinity : 0, duration: 0.8, ease: 'linear' }}>
                   <Play size={14} />
                 </motion.div>
-                {isRunning ? 'Simulating…' : `Run Forecast — P${effectiveLevel}`}
+                {isRunning ? 'Simulating…' : 'Run forecast'}
               </button>
+              {forecastError && (
+                <p style={{ color: CHART_STATUS.warning }} className="text-[10px] leading-snug">
+                  {forecastError}
+                </p>
+              )}
 
               {/* Trend summary */}
               <AnimatePresence>

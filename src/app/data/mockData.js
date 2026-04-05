@@ -157,14 +157,24 @@ export function generateRollouts(patientId, patientsList = patients) {
   return rollouts;
 }
 
-export function generateForecast(patient, newLevel) {
+/**
+ * @param {object} patient
+ * @param {number[]} levelsSix — P-level (2–9) for each hour T+1 … T+6
+ */
+export function generateForecast(patient, levelsSix) {
+  if (!Array.isArray(levelsSix) || levelsSix.length !== 6) return [];
+  if (!levelsSix.every(lvl => typeof lvl === 'number' && lvl >= 2 && lvl <= 9 && Number.isFinite(lvl))) {
+    return [];
+  }
   const last = patient.timeline[5];
-  const delta = newLevel - patient.deviceLevel;
+  const deviceLevel = patient.deviceLevel;
   const forecast = [];
 
   for (let i = 0; i < 6; i++) {
+    const lvl = levelsSix[i];
     const h = i + 1;
-    const progress = (i + 1) / 6;
+    const progress = h / 6;
+    const delta = lvl - deviceLevel;
     forecast.push({
       t: 6 + i,
       timestamp: new Date(new Date(last.timestamp).getTime() + h * 3600000).toISOString(),

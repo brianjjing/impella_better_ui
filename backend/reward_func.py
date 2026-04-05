@@ -1,0 +1,80 @@
+import torch
+import numpy as np
+from backend.cost_func import weaning_score_physician, compute_acp_cost
+
+def hr_penalty(hr):
+    relu = torch.nn.ReLU()
+    return relu((hr - 75) ** 2 / 250 - 1).item()
+
+
+def min_map_penalty(map):
+    relu = torch.nn.ReLU()
+    return relu(7 * (60 - map) / 20).item()
+
+
+def pulsat_penalty(pulsat):
+    relu = torch.nn.ReLU()
+    lower_penalty = relu(7 * (20 - pulsat) / 20).item()
+    upper_penalty = relu((pulsat - 50) / 20).item()
+    return lower_penalty + upper_penalty
+
+
+def hypertention_penalty(map):
+    relu = torch.nn.ReLU()
+    return relu((map - 106) / 18).item()
+
+
+def compute_reward_smooth(data, map_dim=0, pulsat_dim=7, hr_dim=9, lvedp_dim=4):
+    """
+    Differentiable version of the reward function using PyTorch
+    data: torch.Tensor, shape (batch_size, horizon, num_features)
+    """
+    assert data.shape[-1] == 12, "data should have 12 features"
+    assert data.shape[-2] == 6, "data should have 6 time steps"
+
+    score = torch.tensor(0.0, device=data.device)
+    # MAP component
+    map_data = data[..., map_dim]
+    
+
+    # MinMAP range component
+    minMAP = torch.min(map_data)
+    if minMAP.reshape(-1) < 10:
+        raise ValueError("MAP must be unnormalized before reward calculation")
+    score += min_map_penalty(minMAP)
+
+    # hypertention penalty
+    meanMAP = torch.mean(map_data)
+    score += hypertention_penalty(meanMAP)
+
+    # Heart Rate component
+    hr = torch.min(data[..., hr_dim])
+    if hr.reshape(-1) < 10:
+        raise ValueError("HR must be unnormalized before reward calculation")
+    # Polynomial penalty for heart rate outside 50-100 range
+    # Quadratic penalty centered at hr=75, max penalty at hr=50 or 100
+    score += hr_penalty(hr)
+
+    # Pulsatility component
+    pulsat = torch.min(data[..., pulsat_dim])
+   
+    score += pulsat_penalty(pulsat)
+  
+    return -score
+
+
+def compute_shaped_reward(data, actions, gamma1, gamma2, gamma3):
+    """
+    Computes reward score with the addition of ACP, WS, and AIR costs for one sample. 
+    data: torch.Tensor, shape (1, 6, num_features), normalized data
+    actions: torch.Tensor, shape (1, 2), unnormalized actions
+    gamma1, gamma2, gamma3: float, weighting factors for the cost components
+    returns: np.float64, final reward
+    """
+
+    acp = compute_acp_cost(actions,data) #max 8, min 0 
+    ws = weaning_score_physician(data, actions) #max 2, min -1
+    
+    final_rwd = gamma2*ws - gamma1 *acp 
+    return np.float64(final_rwd)
+

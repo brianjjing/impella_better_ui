@@ -1,15 +1,7 @@
 import math
-import os
-from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
+from backend.api_initialization import app, get_data_pickle_path
 from backend.model import TimeSeriesDataset, Decoder, TimeSeriesTransformer, WorldModel, pd, np  # or the correct module path
-
-_BACKEND_DIR = Path(__file__).resolve().parent
-# Default pickle next to this file (works regardless of uvicorn cwd)
-_DEFAULT_DATA_PICKLE = _BACKEND_DIR / "10min_1hr_all_data copy.pkl"
 
 
 def _safe_float(v):
@@ -20,44 +12,12 @@ def _safe_float(v):
     except (TypeError, ValueError):
         return None
 
-app = FastAPI()
-
-# Allowing frontend origin during dev:
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-def _data_path() -> str:
-    env = os.environ.get("SMARTWEAN_DATA_PICKLE")
-    if env and Path(env).is_file():
-        return env
-    if _DEFAULT_DATA_PICKLE.is_file():
-        return str(_DEFAULT_DATA_PICKLE)
-    # Fallback: original repo layout under GORMPO_abiomed
-    fallback = _BACKEND_DIR.parent.parent / "GORMPO_abiomed" / "abiomed_env" / "data" / "10min_1hr_all_data.pkl"
-    if fallback.is_file():
-        return str(fallback)
-    raise FileNotFoundError(
-        f"No dataset found. Set SMARTWEAN_DATA_PICKLE or place a pickle at {_DEFAULT_DATA_PICKLE}"
-    )
-
 
 @app.get("/api/patients")
 def get_patients():
     # 1. Load raw Abiomed data
     world_model = WorldModel(num_features=12, forecast_horizon=11)
-    world_model.load_data(path=_data_path())
+    world_model.load_data(path=get_data_pickle_path())
 
     # Converting the data tensor to a pandas df:
     data_tensor = world_model.data_train.data  # torch.Tensor [N, T, F] (normalized)

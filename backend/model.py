@@ -18,7 +18,7 @@ class TimeSeriesDataset(Dataset):
         self.output_horizon = output_horizon
         data, pl, labels = self.prep_transformer_world(data_all)
         self.data = data
-        self.pl = pl #pump level
+        self.pl = pl
         self.labels = labels
 
     def __len__(self):

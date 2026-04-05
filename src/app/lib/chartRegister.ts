@@ -14,6 +14,7 @@ import {
   RadarController,
 } from 'chart.js';
 import annotationPlugin from 'chartjs-plugin-annotation';
+import { gradientSeverityLinePlugin } from './chartGradientSeverityLinePlugin';
 
 ChartJS.register(
   CategoryScale,
@@ -29,4 +30,5 @@ ChartJS.register(
   Legend,
   Filler,
   annotationPlugin,
+  gradientSeverityLinePlugin,
 );

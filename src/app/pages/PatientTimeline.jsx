@@ -2,21 +2,13 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Line } from 'react-chartjs-2';
 import { MessageSquare, X, Users, Eye, Search } from 'lucide-react';
-import { useTheme, getFeatureStatus } from '../context/ThemeContext';
+import { useTheme } from '../context/ThemeContext';
 import { featureConfigs, featureKeys } from '../data/mockData';
-import { CHART_STATUS, chartStatusColor } from '../constants/chartStatusColors';
+import { CHART_STATUS } from '../constants/chartStatusColors';
+import { continuousSeverityColor } from '../lib/continuousSeverityColor';
 import { useLayoutContext } from '../components/Layout';
 
 const PATIENT_COLORS = ['#3B82F6', '#F59E0B', '#10B981', '#EC4899'];
-
-function severitySegmentBorderColor(thr) {
-  return ctx => {
-    if (ctx.p0.skip || ctx.p1.skip) return undefined;
-    const y = ctx.p1.parsed.y;
-    if (y == null || typeof y !== 'number' || Number.isNaN(y)) return undefined;
-    return chartStatusColor(getFeatureStatus(y, thr));
-  };
-}
 
 function TimelineFeatureChart({
   mergedData,
@@ -26,7 +18,6 @@ function TimelineFeatureChart({
   setHoveredLabel,
   activePatientsData,
   thr,
-  cfg,
   patients,
   isDark,
   gridColor,
@@ -39,42 +30,33 @@ function TimelineFeatureChart({
 
   const datasets = useMemo(
     () =>
-      activePatientsData.map((p, pi) => {
-        const lineColor = PATIENT_COLORS[pi] || cfg.color;
-        return {
-          label: p.name,
-          patientId: p.id,
-          data: mergedData.map(row => row[`${p.id}_${feature}`]),
-          borderColor: CHART_STATUS.normal,
-          borderWidth: pi === 0 ? 2.25 : 1.75,
-          tension: 0,
-          segment: {
-            borderColor: severitySegmentBorderColor(thr),
-            borderWidth: ctx => {
-              if (ctx.p0.skip || ctx.p1.skip) return undefined;
-              return pi === 0 ? 2.25 : 1.75;
-            },
-          },
-          pointRadius: 5,
-          pointHoverRadius: 5,
-          spanGaps: true,
-          pointBackgroundColor: ctx => {
-            const v = ctx.raw;
-            if (v == null || typeof v !== 'number') return 'transparent';
-            return chartStatusColor(getFeatureStatus(v, thr));
-          },
-          pointBorderColor: isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)',
-          pointBorderWidth: 2.25,
-          pointHoverBackgroundColor: ctx => {
-            const v = ctx.raw;
-            if (v == null || typeof v !== 'number') return 'transparent';
-            return chartStatusColor(getFeatureStatus(v, thr));
-          },
-          pointHoverBorderColor: isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)',
-          pointHoverBorderWidth: 2.25,
-        };
-      }),
-    [mergedData, feature, activePatientsData, thr, isDark, cfg.color],
+      activePatientsData.map((p, pi) => ({
+        label: p.name,
+        patientId: p.id,
+        data: mergedData.map(row => row[`${p.id}_${feature}`]),
+        borderWidth: 0,
+        severityThreshold: thr,
+        gradientLineWidth: pi === 0 ? 2.25 : 1.75,
+        tension: 0,
+        pointRadius: 5,
+        pointHoverRadius: 5,
+        spanGaps: true,
+        pointBackgroundColor: ctx => {
+          const v = ctx.raw;
+          if (v == null || typeof v !== 'number') return 'transparent';
+          return continuousSeverityColor(v, thr);
+        },
+        pointBorderColor: isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)',
+        pointBorderWidth: 2.25,
+        pointHoverBackgroundColor: ctx => {
+          const v = ctx.raw;
+          if (v == null || typeof v !== 'number') return 'transparent';
+          return continuousSeverityColor(v, thr);
+        },
+        pointHoverBorderColor: isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)',
+        pointHoverBorderWidth: 2.25,
+      })),
+    [mergedData, feature, activePatientsData, thr, isDark],
   );
 
   const annotationEntries = useMemo(() => {
@@ -147,7 +129,7 @@ function TimelineFeatureChart({
             },
             labelColor: ctx => {
               const v = ctx.parsed.y;
-              const c = chartStatusColor(getFeatureStatus(v, thr));
+              const c = continuousSeverityColor(v, thr);
               return { borderColor: c, backgroundColor: c };
             },
           },
@@ -454,7 +436,6 @@ export default function PatientTimeline() {
                       setHoveredLabel={setHoveredLabel}
                       activePatientsData={activePatientsData}
                       thr={thr}
-                      cfg={cfg}
                       patients={patients}
                       isDark={isDark}
                       gridColor={gridColor}

@@ -1,11 +1,11 @@
 /**
- * High-saturation status colors for charts (dots, bands, legends).
- * Intentionally brighter than theme palette for clinical readability on graphs.
+ * Discrete + ramp anchors: pure RGB green (best) → pure yellow (mid) → pure red (worst).
+ * Continuous charts interpolate linearly in RGB between these three.
  */
 export const CHART_STATUS = {
-  normal: '#4ADE80',
-  warning: '#FB923C',
-  critical: '#F87171',
+  normal: '#00FF00',
+  warning: '#FFFF00',
+  critical: '#FF0000',
 };
 
 /** Map getFeatureStatus() result to a chart color */
