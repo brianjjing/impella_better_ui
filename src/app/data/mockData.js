@@ -1,8 +1,8 @@
 export const featureConfigs = {
   MAP:          { label: 'Mean Arterial Pressure',       unit: 'mmHg',     normalMin: 70,    normalMax: 100,   warningMin: 60,    warningMax: 110,   color: '#3B82F6', description: 'Average arterial pressure throughout the cardiac cycle' },
-  pumpSpeed:    { label: 'Mean Pump Speed',            unit: 'RPM',      normalMin: 22000, normalMax: 46000, warningMin: 20000, warningMax: 50000, color: '#8B5CF6', description: 'Rotational speed of the Impella pump motor' },
-  motorCurrent: { label: 'Motor Current',             unit: 'A',        normalMin: 3.5,   normalMax: 7.0,   warningMin: 3.0,   warningMax: 8.0,   color: '#EC4899', description: 'Electrical current powering the pump motor' },
-  pumpFlow:     { label: 'Pump Flow',                 unit: 'L/min',    normalMin: 2.5,   normalMax: 5.0,   warningMin: 2.0,   warningMax: 6.0,   color: '#06B6D4', description: 'Volume of blood displaced by the pump per minute' },
+  pumpSpeed:    { label: 'Mean Pump Speed',            unit: 'RPM',      normalMin: 22000, normalMax: 46000, warningMin: 20000, warningMax: 50000, color: '#8B5CF6', description: 'Rotational speed of the Impella pump motor', deviceMetric: true },
+  motorCurrent: { label: 'Motor Current',             unit: 'A',        normalMin: 3.5,   normalMax: 7.0,   warningMin: 3.0,   warningMax: 8.0,   color: '#EC4899', description: 'Electrical current powering the pump motor', deviceMetric: true },
+  pumpFlow:     { label: 'Pump Flow',                 unit: 'L/min',    normalMin: 2.5,   normalMax: 5.0,   warningMin: 2.0,   warningMax: 6.0,   color: '#06B6D4', description: 'Volume of blood displaced by the pump per minute', deviceMetric: true },
   LVP:          { label: 'LV Pressure',               unit: 'mmHg',     normalMin: 60,    normalMax: 120,   warningMin: 50,    warningMax: 140,   color: '#F59E0B', description: 'Pressure inside the left ventricle' },
   LVEDP:        { label: 'LV End-Diastolic Pressure', unit: 'mmHg',     normalMin: 4,     normalMax: 12,    warningMin: 2,     warningMax: 18,    color: '#EF4444', description: 'LV pressure at end of diastole — lower is better for weaning' },
   HR:           { label: 'Heart Rate',                unit: 'bpm',      normalMin: 60,    normalMax: 100,   warningMin: 50,    warningMax: 110,   color: '#10B981', description: 'Number of heartbeats per minute' },

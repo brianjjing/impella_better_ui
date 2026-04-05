@@ -39,8 +39,12 @@ def create_app() -> FastAPI:
     )
 
     from backend.forecast_api import router as forecast_router
+    from backend.policy_evaluation_api import router as policy_evaluation_router
+    from backend.patient_data_api import router as patients_router
 
     app.include_router(forecast_router, prefix="/api")
+    app.include_router(policy_evaluation_router, prefix="/api")
+    app.include_router(patients_router, prefix="/api")
     return app
 
 

@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Bar, Line, Radar } from 'react-chartjs-2';
-import { Activity, Star, BarChart2, TrendingUp, Eye, ArrowDown, ArrowRight } from 'lucide-react';
+import { Activity, Star, BarChart2, TrendingUp, Eye, ArrowDown, ArrowRight, AlertCircle } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { policyDistributions, generateRollouts, featureConfigs } from '../data/mockData';
 import { useLayoutContext } from '../components/Layout';
@@ -279,6 +279,10 @@ export default function PolicyEvaluation() {
   const { patients, selectedPatientId } = useLayoutContext();
   const [activeTab, setActiveTab] = useState('distribution');
   const [hoveredBarIndex, setHoveredBarIndex] = useState(null);
+  const [policyApi, setPolicyApi] = useState(null);
+  const [policyLoading, setPolicyLoading] = useState(false);
+  /** Set when /api/policy_evaluation fails — UI then falls back to mockData.generateRollouts (placeholder trajectories). */
+  const [policyFetchError, setPolicyFetchError] = useState(null);
 
   const bg        = isDark ? '#080E1A' : '#F4F6FA';
   const card      = isDark ? '#0C1526' : '#FFFFFF';
@@ -289,11 +293,59 @@ export default function PolicyEvaluation() {
   const gridColor = isDark ? '#1A2740' : '#E2E8F0';
 
   const patient  = patients.find(p => p.id === selectedPatientId);
-  const dist     = policyDistributions[selectedPatientId] ?? policyDistributions['P001'] ?? [0.2, 0.2, 0.2, 0.2, 0.1, 0.05, 0.03, 0.02];
+
+  useEffect(() => {
+    if (!selectedPatientId) return;
+    let cancelled = false;
+    setPolicyLoading(true);
+    setPolicyFetchError(null);
+    fetch(`/api/policy_evaluation?patient_id=${encodeURIComponent(selectedPatientId)}`)
+      .then(async res => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = typeof data?.detail === 'string' ? data.detail : Array.isArray(data?.detail)
+            ? data.detail.map(d => d.msg).join('; ')
+            : res.statusText;
+          throw new Error(msg || 'Policy evaluation unavailable');
+        }
+        return data;
+      })
+      .then(data => {
+        if (!cancelled) {
+          setPolicyApi(data);
+          setPolicyFetchError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setPolicyApi(null);
+          setPolicyFetchError(err?.message || 'Network or server error');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPolicyLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [selectedPatientId]);
+
+  const mockDist = policyDistributions[selectedPatientId] ?? policyDistributions['P001'] ?? [0.2, 0.2, 0.2, 0.2, 0.1, 0.05, 0.03, 0.02];
+  const dist = policyApi?.distribution?.length === 8 ? policyApi.distribution : mockDist;
+
   const rollouts = useMemo(() => generateRollouts(selectedPatientId, patients), [selectedPatientId, patients]);
 
-  // R1 is always the most probable rollout (first optimal trajectory)
-  const r1 = rollouts[0];
+  const r1FromApi = policyApi?.rollout
+    ? {
+        id: policyApi.rollout.id,
+        label: policyApi.rollout.label,
+        quality: policyApi.rollout.quality,
+        totalReward: policyApi.rollout.totalReward,
+        finalScore: policyApi.rollout.finalScore,
+        steps: policyApi.rollout.steps,
+      }
+    : null;
+
+  // R1 is always the most probable rollout (first optimal trajectory), or SAC/mock API rollout
+  const r1 = r1FromApi ?? rollouts[0];
 
   // Safe access for buildTrajData / radarData when no rollout yet
   const r1Steps = r1?.steps ?? [];
@@ -343,8 +395,44 @@ export default function PolicyEvaluation() {
             <Star size={10} /> Recommended: {mostLikelyAction}
           </div>
           <span style={{ color: subtext }} className="text-xs">{patient?.name}</span>
+          {policyLoading && (
+            <span style={{ color: subtext }} className="text-xs">Loading policy…</span>
+          )}
+          {!policyLoading && policyApi?.source === 'mock' && (
+            <span
+              title={policyApi?.detail || 'Using mock distribution / rollout (no SAC checkpoint or load failed)'}
+              style={{ color: scheme.warning }}
+              className="text-xs cursor-help border rounded-full px-2 py-0.5"
+            >
+              Mock policy
+            </span>
+          )}
+          {!policyLoading && policyApi?.source === 'sac' && (
+            <span
+              style={{ color: scheme.good, borderColor: scheme.good + '44' }}
+              className="text-xs border rounded-full px-2 py-0.5"
+            >
+              SAC policy
+            </span>
+          )}
         </div>
       </div>
+
+      {policyFetchError && (
+        <div
+          style={{ background: scheme.critical + '18', borderColor: scheme.critical + '55', color: text }}
+          className="mx-4 mt-3 px-4 py-2.5 rounded-lg border text-xs flex items-start gap-2 flex-shrink-0"
+        >
+          <AlertCircle size={14} className="shrink-0 mt-0.5" style={{ color: scheme.critical }} />
+          <div>
+            <span className="font-semibold">Policy API unavailable — showing placeholder trajectories from mock data.</span>
+            <span style={{ color: subtext }} className="block mt-1">{policyFetchError}</span>
+            <span style={{ color: subtext }} className="block mt-1 opacity-90">
+              Ensure the FastAPI server is running on port 8000, the world model + dataset paths resolve, and this patient id exists in the training split (e.g. try P001).
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Full-width main content (no right sidebar) */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{ background: bg }}>

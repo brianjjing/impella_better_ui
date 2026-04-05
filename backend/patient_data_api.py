@@ -1,7 +1,11 @@
 import math
 
-from backend.api_initialization import app, get_data_pickle_path
-from backend.model import TimeSeriesDataset, Decoder, TimeSeriesTransformer, WorldModel, pd, np  # or the correct module path
+from fastapi import APIRouter
+
+from backend.api_initialization import get_data_pickle_path
+from backend.model import WorldModel, pd, np
+
+router = APIRouter(tags=["patients"])
 
 
 def _safe_float(v):
@@ -13,7 +17,7 @@ def _safe_float(v):
         return None
 
 
-@app.get("/api/patients")
+@router.get("/patients")
 def get_patients():
     # 1. Load raw Abiomed data
     world_model = WorldModel(num_features=12, forecast_horizon=11)

@@ -152,6 +152,9 @@ class AbiomedRLEnv(gym.Env):
         if options is not None:
             print(f"Resetting with options: {options}")
             self.current_state = options["state"]
+            all_states = self.current_state
+            # Not sampled from the offline dataset; caller-provided state (e.g. policy API).
+            self.init_data_index = -1
         else:
             self.current_state, all_states = self._get_next_episode_start(idx)
         

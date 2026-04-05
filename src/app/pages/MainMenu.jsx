@@ -1,4 +1,5 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -22,6 +23,80 @@ const statusConfig = {
 
 const severityOrder = { critical: 0, warning: 1, stable: 2, improving: 3, weaned: 4 };
 
+function formatMetricValue(val) {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return '—';
+  return val > 100 ? String(Math.round(val)) : val.toFixed(val < 10 ? 2 : 0);
+}
+
+function MetricPopoverPortal({
+  metricKey,
+  features,
+  metricPopoverPos,
+  card,
+  border,
+  text,
+  subtext,
+  scheme,
+  isDark,
+  metricPopoverRef,
+  onClose,
+}) {
+  const cfg = featureConfigs[metricKey];
+  const val = features?.[metricKey];
+  const isOutOfRange = typeof val === 'number' && Number.isFinite(val)
+    && (val < cfg.normalMin || val > cfg.normalMax);
+  const rangeLabel = `${cfg.normalMin}–${cfg.normalMax} ${cfg.unit}`;
+  const rangeTitle = cfg.deviceMetric ? 'Typical operating range' : 'Healthy range';
+  return createPortal(
+    <div
+      ref={metricPopoverRef}
+      data-metric-popover
+      className="fixed z-[200] w-[260px] rounded-xl border p-3 shadow-2xl"
+      style={{
+        top: metricPopoverPos.top,
+        left: metricPopoverPos.left,
+        background: card,
+        borderColor: border,
+        boxShadow: `0 12px 40px ${isDark ? '#000000aa' : '#64748b44'}`,
+      }}
+      onMouseDown={e => e.stopPropagation()}
+    >
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div style={{ color: text }} className="text-sm font-semibold leading-snug pr-1">
+          {cfg.label}
+        </div>
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={onClose}
+          style={{ color: subtext }}
+          className="p-0.5 rounded-md hover:opacity-80 shrink-0"
+        >
+          <X size={16} />
+        </button>
+      </div>
+      <div className="space-y-1.5 text-xs">
+        <div className="flex justify-between gap-3">
+          <span style={{ color: subtext }}>Value</span>
+          <span
+            className="font-mono font-semibold"
+            style={{ color: isOutOfRange ? scheme.critical : text }}
+          >
+            {formatMetricValue(val)} {cfg.unit}
+          </span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span style={{ color: subtext }}>{rangeTitle}</span>
+          <span style={{ color: text }} className="font-mono text-right">
+            {rangeLabel}
+          </span>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function scoreMatch(patient, query) {
   const q = query.toLowerCase().trim();
   if (!q) return -1;
@@ -43,6 +118,11 @@ export default function MainMenu() {
   const [searchQuery, setSearchQuery]       = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const searchRef = useRef(null);
+
+  const [metricDetailKey, setMetricDetailKey] = useState(null);
+  const [hoveredMetricKey, setHoveredMetricKey] = useState(null);
+  const [metricPopoverPos, setMetricPopoverPos] = useState({ top: 0, left: 0 });
+  const metricPopoverRef = useRef(null);
 
   const features = selectedPatient?.timeline?.[5] ?? {};
 
@@ -78,6 +158,42 @@ export default function MainMenu() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  const closeMetricDetail = useCallback(() => {
+    setMetricDetailKey(null);
+  }, []);
+
+  useEffect(() => {
+    if (!metricDetailKey) return;
+    const onDown = (e) => {
+      if (metricPopoverRef.current?.contains(e.target)) return;
+      if (e.target.closest?.('[data-metric-trigger]')) return;
+      closeMetricDetail();
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [metricDetailKey, closeMetricDetail]);
+
+  const openMetricDetail = (key, el) => {
+    const r = el.getBoundingClientRect();
+    const pad = 8;
+    const popoverWidth = 260;
+    let left = r.left;
+    if (left + popoverWidth > window.innerWidth - pad) {
+      left = Math.max(pad, window.innerWidth - popoverWidth - pad);
+    }
+    setMetricPopoverPos({ top: r.bottom + 6, left });
+    setMetricDetailKey(key);
+  };
+
+  const handleMetricTriggerClick = (key, e) => {
+    e.stopPropagation();
+    if (metricDetailKey === key) {
+      closeMetricDetail();
+      return;
+    }
+    openMetricDetail(key, e.currentTarget);
+  };
 
   const handleSelectSuggestion = (patientId) => {
     setSelectedPatientId(patientId);
@@ -252,19 +368,62 @@ export default function MainMenu() {
                 {featureKeys.map(key => {
                   const cfg = featureConfigs[key];
                   const val = features?.[key];
-                  const isOutOfRange = typeof val === 'number' && (val < cfg.normalMin || val > cfg.normalMax);
+                  const isOutOfRange = typeof val === 'number' && Number.isFinite(val)
+                    && (val < cfg.normalMin || val > cfg.normalMax);
                   const numColor = isOutOfRange ? scheme.critical : text;
+                  const isOpen = metricDetailKey === key;
+                  const isHover = hoveredMetricKey === key;
+                  const metricBoxShadow = isOpen
+                    ? `0 0 0 1px ${scheme.primary}55, 0 8px 28px ${scheme.primary}45`
+                    : isHover
+                      ? `0 0 0 1px ${scheme.primary}44, 0 4px 20px ${scheme.good}55`
+                      : 'none';
                   return (
-                    <div key={key} style={{ background: muted }} className="rounded-lg p-2 text-center">
-                      <div style={{ color: subtext }} className="text-[11px] truncate">{cfg.label.split(' ').slice(0, 2).join(' ')}</div>
-                      <div className="text-base font-mono font-semibold" style={{ color: numColor }}>
-                        {typeof val === 'number' ? (val > 100 ? Math.round(val) : val.toFixed(val < 10 ? 2 : 0)) : val}
+                    <motion.button
+                      key={key}
+                      type="button"
+                      data-metric-trigger
+                      onClick={e => handleMetricTriggerClick(key, e)}
+                      onMouseEnter={() => setHoveredMetricKey(key)}
+                      onMouseLeave={() => setHoveredMetricKey(k => (k === key ? null : k))}
+                      whileHover={{
+                        scale: 1.03,
+                        transition: { duration: 0.18, ease: [0.25, 0.46, 0.45, 0.94] },
+                      }}
+                      whileTap={{ scale: 0.99 }}
+                      style={{
+                        background: muted,
+                        boxShadow: metricBoxShadow,
+                      }}
+                      className="rounded-lg p-2 text-center w-full cursor-pointer border border-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent"
+                    >
+                      <div style={{ color: subtext }} className="text-[11px] truncate pointer-events-none">
+                        {cfg.label.split(' ').slice(0, 2).join(' ')}
                       </div>
-                      <div style={{ color: subtext }} className="text-[11px]">{cfg.unit}</div>
-                    </div>
+                      <div className="text-base font-mono font-semibold pointer-events-none" style={{ color: numColor }}>
+                        {formatMetricValue(val)}
+                      </div>
+                      <div style={{ color: subtext }} className="text-[11px] pointer-events-none">{cfg.unit}</div>
+                    </motion.button>
                   );
                 })}
               </div>
+
+              {metricDetailKey && (
+                <MetricPopoverPortal
+                  metricKey={metricDetailKey}
+                  features={features}
+                  metricPopoverPos={metricPopoverPos}
+                  card={card}
+                  border={border}
+                  text={text}
+                  subtext={subtext}
+                  scheme={scheme}
+                  isDark={isDark}
+                  metricPopoverRef={metricPopoverRef}
+                  onClose={closeMetricDetail}
+                />
+              )}
             </motion.div>
 
             {/* Navigation cards */}
