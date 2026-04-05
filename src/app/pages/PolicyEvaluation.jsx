@@ -2,8 +2,8 @@ import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Bar, Line, Radar } from 'react-chartjs-2';
 import { Activity, Star, BarChart2, TrendingUp, Eye, ArrowDown, ArrowRight, AlertCircle } from 'lucide-react';
-import { useTheme } from '../context/ThemeContext';
-import { policyDistributions, generateRollouts, featureConfigs } from '../data/mockData';
+import { useTheme, getSurfaces } from '../context/ThemeContext';
+import { featureConfigs } from '../data/mockData';
 import { useLayoutContext } from '../components/Layout';
 
 const PUMP_LABELS  = ['P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9'];
@@ -284,19 +284,21 @@ export default function PolicyEvaluation() {
   /** Set when /api/policy_evaluation fails — UI then falls back to mockData.generateRollouts (placeholder trajectories). */
   const [policyFetchError, setPolicyFetchError] = useState(null);
 
-  const bg        = isDark ? '#080E1A' : '#F4F6FA';
-  const card      = isDark ? '#0C1526' : '#FFFFFF';
-  const border    = isDark ? '#1A2740' : '#E2E8F0';
-  const text      = isDark ? '#E2E8F0' : '#1E293B';
-  const subtext   = isDark ? '#9CA3AF' : '#4B5563';
-  const muted     = isDark ? '#1E293B' : '#F1F5F9';
-  const gridColor = isDark ? '#1A2740' : '#E2E8F0';
+  const s         = getSurfaces(isDark);
+  const bg        = s.bg;
+  const card      = s.card;
+  const border    = s.border;
+  const text      = s.text;
+  const subtext   = s.subtext;
+  const muted     = s.muted;
+  const gridColor = s.gridColor;
 
   const patient  = patients.find(p => p.id === selectedPatientId);
 
   useEffect(() => {
     if (!selectedPatientId) return;
     let cancelled = false;
+    setPolicyApi(null);
     setPolicyLoading(true);
     setPolicyFetchError(null);
     fetch(`/api/policy_evaluation?patient_id=${encodeURIComponent(selectedPatientId)}`)
@@ -328,10 +330,11 @@ export default function PolicyEvaluation() {
     return () => { cancelled = true; };
   }, [selectedPatientId]);
 
-  const mockDist = policyDistributions[selectedPatientId] ?? policyDistributions['P001'] ?? [0.2, 0.2, 0.2, 0.2, 0.1, 0.05, 0.03, 0.02];
-  const dist = policyApi?.distribution?.length === 8 ? policyApi.distribution : mockDist;
+  const hasPolicyData = Boolean(
+    policyApi?.distribution?.length === 8 && policyApi?.rollout?.steps?.length,
+  );
 
-  const rollouts = useMemo(() => generateRollouts(selectedPatientId, patients), [selectedPatientId, patients]);
+  const dist = hasPolicyData ? policyApi.distribution : [0, 0, 0, 0, 0, 0, 0, 0];
 
   const r1FromApi = policyApi?.rollout
     ? {
@@ -344,22 +347,23 @@ export default function PolicyEvaluation() {
       }
     : null;
 
-  // R1 is always the most probable rollout (first optimal trajectory), or SAC/mock API rollout
-  const r1 = r1FromApi ?? rollouts[0];
+  const r1 = r1FromApi;
 
-  // Safe access for buildTrajData / radarData when no rollout yet
   const r1Steps = r1?.steps ?? [];
   const r1LastStep = r1Steps[r1Steps.length - 1];
 
+  const maxProb = Math.max(...dist);
   const policyData = PUMP_LABELS.map((label, i) => ({
     label,
     probability: dist[i] ?? 0,
-    isMax: dist[i] === Math.max(...dist),
+    isMax: hasPolicyData && maxProb > 0 && dist[i] === maxProb,
   }));
 
-  const mostLikelyAction = PUMP_LABELS[dist.indexOf(Math.max(...dist))];
-  const entropy          = (-dist.reduce((s, p) => s + (p > 0 ? p * Math.log(p) : 0), 0)).toFixed(3);
-  const weaningDown      = dist.slice(0, 4).reduce((a, b) => a + b, 0) > 0.5;
+  const mostLikelyAction = hasPolicyData ? PUMP_LABELS[dist.indexOf(maxProb)] : '—';
+  const entropy = hasPolicyData
+    ? (-dist.reduce((s, p) => s + (p > 0 ? p * Math.log(p) : 0), 0)).toFixed(3)
+    : '—';
+  const weaningDown = hasPolicyData && dist.slice(0, 4).reduce((a, b) => a + b, 0) > 0.5;
 
   // Build trajectory data for R1 only
   const buildTrajData = (feature) =>
@@ -368,14 +372,16 @@ export default function PolicyEvaluation() {
       value: step.state[feature] ?? null,
     }));
 
-  // Radar data for R1's final projected state
+  // Radar: neutral 50 / mid-normal when waiting for API (flat placeholder ring)
   const radarData = KEY_FEATURES.map(key => {
     const cfg  = featureConfigs[key];
     const norm = (v) => Math.min(100, Math.max(0, ((v - cfg.normalMin) / (cfg.normalMax - cfg.normalMin)) * 100));
-    const val = r1LastStep?.state[key] ?? cfg.normalMin;
+    const val = hasPolicyData && r1LastStep?.state[key] != null
+      ? r1LastStep.state[key]
+      : (cfg.normalMin + cfg.normalMax) / 2;
     return {
       feature: cfg.label.split(' ').slice(0, 2).join(' '),
-      'Projected State': norm(val),
+      'Projected State': hasPolicyData ? norm(val) : 50,
       'Normal Midpoint': 50,
     };
   });
@@ -392,7 +398,7 @@ export default function PolicyEvaluation() {
         <div className="ml-auto flex items-center gap-3">
           <div style={{ background: scheme.primary + '18', color: scheme.primary, borderColor: scheme.primary + '44' }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs">
-            <Star size={10} /> Recommended: {mostLikelyAction}
+            <Star size={10} /> Recommended: {hasPolicyData ? mostLikelyAction : '—'}
           </div>
           <span style={{ color: subtext }} className="text-xs">{patient?.name}</span>
           {policyLoading && (
@@ -425,7 +431,7 @@ export default function PolicyEvaluation() {
         >
           <AlertCircle size={14} className="shrink-0 mt-0.5" style={{ color: scheme.critical }} />
           <div>
-            <span className="font-semibold">Policy API unavailable — showing placeholder trajectories from mock data.</span>
+            <span className="font-semibold">Policy API unavailable — charts stay empty until the server responds successfully.</span>
             <span style={{ color: subtext }} className="block mt-1">{policyFetchError}</span>
             <span style={{ color: subtext }} className="block mt-1 opacity-90">
               Ensure the FastAPI server is running on port 8000, the world model + dataset paths resolve, and this patient id exists in the training split (e.g. try P001).
@@ -444,7 +450,7 @@ export default function PolicyEvaluation() {
               label: 'Policy Certainty',
               color: scheme.accent,
               value: entropy,
-              desc: 'Higher values indicate greater uncertainty in the recommendation',
+              desc: hasPolicyData ? 'Higher values indicate greater uncertainty in the recommendation' : 'Loads from policy evaluation API',
               icon: BarChart2,
               bg: scheme.accent + '12',
             },
@@ -452,16 +458,20 @@ export default function PolicyEvaluation() {
               label: 'Recommended Pump Level',
               color: scheme.good,
               value: mostLikelyAction,
-              desc: `${(Math.max(...dist) * 100).toFixed(0)}% probability — highest-confidence action`,
+              desc: hasPolicyData
+                ? `${(maxProb * 100).toFixed(0)}% probability — highest-confidence action`
+                : 'Awaiting API response',
               icon: Star,
               bg: scheme.good + '12',
             },
             {
               label: 'Weaning Direction',
               color: scheme.primary,
-              value: weaningDown ? 'Reducing ↓' : 'Maintaining →',
-              desc: weaningDown ? 'AI recommends reducing pump support' : 'AI recommends maintaining current support',
-              icon: weaningDown ? ArrowDown : ArrowRight,
+              value: hasPolicyData ? (weaningDown ? 'Reducing ↓' : 'Maintaining →') : '—',
+              desc: hasPolicyData
+                ? (weaningDown ? 'AI recommends reducing pump support' : 'AI recommends maintaining current support')
+                : 'Awaiting API response',
+              icon: hasPolicyData ? (weaningDown ? ArrowDown : ArrowRight) : ArrowRight,
               bg: scheme.primary + '12',
             },
           ].map(({ label, value, desc, color, icon: Icon, bg: ibg }) => (
@@ -607,21 +617,27 @@ export default function PolicyEvaluation() {
                 {/* Action sequence */}
                 <div style={{ background: muted, borderColor: border }} className="mt-4 rounded-lg border p-3">
                   <div style={{ color: subtext }} className="text-xs font-medium mb-2">Projected Pump Level Sequence</div>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {r1Steps.map((step, i) => (
-                      <div key={i} className="flex items-center gap-1">
-                        <span style={{ background: R1_COLOR + '22', color: R1_COLOR, borderColor: R1_COLOR + '44' }}
-                          className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full border">
-                          {step.actionLabel}
-                        </span>
-                        {i < r1Steps.length - 1 && (
-                          <span style={{ color: subtext }} className="text-xs">→</span>
-                        )}
-                      </div>
-                    ))}
+                  <div className="flex items-center gap-1.5 flex-wrap min-h-[1.5rem]">
+                    {hasPolicyData ? (
+                      r1Steps.map((step, i) => (
+                        <div key={i} className="flex items-center gap-1">
+                          <span style={{ background: R1_COLOR + '22', color: R1_COLOR, borderColor: R1_COLOR + '44' }}
+                            className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full border">
+                            {step.actionLabel}
+                          </span>
+                          {i < r1Steps.length - 1 && (
+                            <span style={{ color: subtext }} className="text-xs">→</span>
+                          )}
+                        </div>
+                      ))
+                    ) : (
+                      <span style={{ color: subtext }} className="text-xs font-mono">—</span>
+                    )}
                   </div>
                   <div style={{ color: subtext }} className="text-xs mt-1.5 opacity-70">
-                    Pump levels at T+1h through T+{r1Steps.length}h under recommended protocol
+                    {hasPolicyData
+                      ? `Pump levels at T+1h through T+${r1Steps.length}h under recommended protocol`
+                      : 'Loads when policy evaluation data is available'}
                   </div>
                 </div>
               </div>
@@ -661,12 +677,16 @@ export default function PolicyEvaluation() {
               <div className="mt-4 grid grid-cols-3 gap-3">
                 <div style={{ background: muted, borderColor: border }} className="rounded-xl border p-3">
                   <div style={{ color: subtext }} className="text-xs font-medium mb-1">Projected Outcome Score</div>
-                  <div style={{ color: R1_COLOR }} className="text-lg font-mono font-semibold">{(r1?.finalScore ?? 0).toFixed(0)}/100</div>
+                  <div style={{ color: R1_COLOR }} className="text-lg font-mono font-semibold">
+                    {hasPolicyData && r1?.finalScore != null ? `${Number(r1.finalScore).toFixed(0)}/100` : '—'}
+                  </div>
                   <div style={{ color: subtext }} className="text-xs opacity-70">at T+6h under recommended protocol</div>
                 </div>
                 <div style={{ background: muted, borderColor: border }} className="rounded-xl border p-3">
                   <div style={{ color: subtext }} className="text-xs font-medium mb-1">Cumulative Benefit Score</div>
-                  <div style={{ color: scheme.accent }} className="text-lg font-mono font-semibold">{(r1?.totalReward ?? 0).toFixed(2)}</div>
+                  <div style={{ color: scheme.accent }} className="text-lg font-mono font-semibold">
+                    {hasPolicyData && r1?.totalReward != null ? Number(r1.totalReward).toFixed(2) : '—'}
+                  </div>
                   <div style={{ color: subtext }} className="text-xs opacity-70">aggregated across all projected steps</div>
                 </div>
                 <div style={{ background: muted, borderColor: border }} className="rounded-xl border p-3">

@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Line } from 'react-chartjs-2';
 import { Sliders, Play, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { useTheme } from '../context/ThemeContext';
+import { useTheme, getSurfaces } from '../context/ThemeContext';
 import { featureConfigs, featureKeys } from '../data/mockData';
 import { CHART_STATUS } from '../constants/chartStatusColors';
 import { continuousSeverityColor } from '../lib/continuousSeverityColor';
@@ -343,13 +343,14 @@ export default function Simulator() {
     };
   }, []);
 
-  const bg = isDark ? '#080E1A' : '#F4F6FA';
-  const card = isDark ? '#0C1526' : '#FFFFFF';
-  const border = isDark ? '#1A2740' : '#E2E8F0';
-  const text = isDark ? '#E2E8F0' : '#1E293B';
-  const subtext = isDark ? '#64748B' : '#94A3B8';
-  const muted = isDark ? '#1E293B' : '#F1F5F9';
-  const gridColor = isDark ? '#1A2740' : '#E2E8F0';
+  const s = getSurfaces(isDark);
+  const bg = s.bg;
+  const card = s.card;
+  const border = s.border;
+  const text = s.text;
+  const subtext = s.subtext;
+  const muted = s.muted;
+  const gridColor = s.gridColor;
 
   const forecast = useMemo(() => {
     if (!hasResult || !forecastRows.length) return [];
@@ -624,7 +625,7 @@ export default function Simulator() {
                         onClick={() => resetFeatureToBaseline(feature)}
                         className="cursor-pointer font-semibold rounded hover:opacity-90 transition-opacity leading-none"
                         style={{
-                          backgroundColor: '#FFFFFF',
+                          backgroundColor: card,
                           border: `1px solid ${border}`,
                           color: isDark ? bg : '#080E1A',
                           padding: '2px 7px',

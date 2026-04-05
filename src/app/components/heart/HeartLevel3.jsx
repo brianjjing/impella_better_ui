@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
-import { useTheme, getHealthColor } from '../../context/ThemeContext';
+import { useTheme, getHealthColor, getSurfaces } from '../../context/ThemeContext';
 
 export function HeartLevel3({ features, healthScore, compact = false }) {
   const canvasRef = useRef(null);
@@ -20,6 +20,7 @@ export function HeartLevel3({ features, healthScore, compact = false }) {
     const ctx = canvas.getContext('2d');
     const ecgHistory = new Array(W).fill(H * 0.85);
     let startTime = 0;
+    const surf = getSurfaces(isDark);
 
     function drawHeart(cx, cy, size, scale, elapsed, isBeat) {
       ctx.save();
@@ -61,11 +62,11 @@ export function HeartLevel3({ features, healthScore, compact = false }) {
       ctx.globalAlpha = 0.3;
       ctx.beginPath();
       ctx.ellipse(size * 0.25, size * 0.15, size * 0.28, size * 0.42, 0.15, 0, Math.PI * 2);
-      ctx.fillStyle = isDark ? '#0F172A' : '#EFF6FF';
+      ctx.fillStyle = isDark ? '#0F172A' : surf.inputBg;
       ctx.fill();
       ctx.beginPath();
       ctx.ellipse(-size * 0.22, size * 0.12, size * 0.22, size * 0.35, -0.1, 0, Math.PI * 2);
-      ctx.fillStyle = isDark ? '#0F172A' : '#EFF6FF';
+      ctx.fillStyle = isDark ? '#0F172A' : surf.inputBg;
       ctx.fill();
       ctx.globalAlpha = 1;
 
@@ -139,7 +140,7 @@ export function HeartLevel3({ features, healthScore, compact = false }) {
       const isBeat    = beatPhase < 0.12;
 
       ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = isDark ? '#080E1A' : '#EFF6FF';
+      ctx.fillStyle = isDark ? '#080E1A' : surf.bg;
       ctx.fillRect(0, 0, W, H);
 
       ctx.strokeStyle = isDark ? 'rgba(148,163,184,0.05)' : 'rgba(100,116,139,0.07)';
@@ -152,7 +153,7 @@ export function HeartLevel3({ features, healthScore, compact = false }) {
       const ecgMid = ecgTop + ecgH / 2;
       const amp    = ecgH * 0.38;
 
-      ctx.fillStyle = isDark ? 'rgba(8,14,26,0.7)' : 'rgba(239,246,255,0.85)';
+      ctx.fillStyle = isDark ? 'rgba(8,14,26,0.7)' : 'rgba(191,200,214,0.88)';
       ctx.fillRect(0, ecgTop - 2, W, ecgH + 4);
       ctx.beginPath();
       ctx.moveTo(0, ecgTop - 2); ctx.lineTo(W, ecgTop - 2);

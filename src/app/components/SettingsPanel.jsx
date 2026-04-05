@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Moon, Sun, Heart, Settings2, ChevronDown, ChevronUp } from 'lucide-react';
-import { useTheme, colorSchemes } from '../context/ThemeContext';
+import { useTheme, colorSchemes, getSurfaces } from '../context/ThemeContext';
 import { featureConfigs, featureKeys } from '../data/mockData';
 
 export function SettingsPanel({ open, onClose }) {
@@ -9,11 +9,12 @@ export function SettingsPanel({ open, onClose }) {
           thresholds, setThreshold, scheme } = useTheme();
   const [expandedThreshold, setExpandedThreshold] = useState(null);
 
-  const panelBg      = isDark ? '#0F172A' : '#FFFFFF';
-  const borderColor  = isDark ? '#1E293B' : '#E2E8F0';
-  const textColor    = isDark ? '#E2E8F0' : '#1E293B';
-  const subtextColor = isDark ? '#9CA3AF' : '#4B5563';
-  const sectionBg    = isDark ? '#1E293B' : '#F8FAFC';
+  const s = getSurfaces(isDark);
+  const panelBg      = s.panelBg;
+  const borderColor  = s.panelBorder;
+  const textColor    = s.text;
+  const subtextColor = s.subtext;
+  const sectionBg    = s.sectionBg;
 
   return (
     <AnimatePresence>

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { useTheme, getHealthColor } from '../../context/ThemeContext';
+import { useTheme, getHealthColor, getSurfaces } from '../../context/ThemeContext';
 
 export function HeartLevel2({ features, healthScore, compact = false }) {
   const { scheme, isDark } = useTheme();
+  const surfaces = getSurfaces(isDark);
   const [beat, setBeat] = useState(false);
   const [phase, setPhase] = useState(0);
 
@@ -50,15 +51,14 @@ export function HeartLevel2({ features, healthScore, compact = false }) {
   const lvColor   = lvedp > 18 ? scheme.critical : lvedp > 12 ? scheme.warning : scheme.good;
   const mapColor  = map < 60 ? scheme.critical : map < 70 ? scheme.warning : scheme.good;
 
-  const bg      = isDark ? '#0F172A' : '#F8FAFC';
-  const surface = isDark ? '#1E293B' : '#FFFFFF';
-  const text    = isDark ? '#FFFFFF' : '#000000';
-  // subtext: noticeably dimmer than primary — medium gray in dark mode, mid-dark gray in light mode
-  const subtext = isDark ? '#9CA3AF' : '#4B5563';
+  const bg      = isDark ? '#0F172A' : surfaces.inputBg;
+  const surface = isDark ? '#1E293B' : surfaces.card;
+  const text    = isDark ? '#FFFFFF' : surfaces.text;
+  const subtext = surfaces.subtext;
 
   return (
     <div
-      style={{ background: surface, borderColor: isDark ? '#334155' : '#E2E8F0' }}
+      style={{ background: surface, borderColor: isDark ? '#334155' : surfaces.border }}
       className="w-full rounded-2xl border p-5 select-none"
     >
       <div className="flex items-center justify-between mb-4">
@@ -120,7 +120,7 @@ function AnatomicalHeart({ lvColor, mapColor, pulsatility, beat, phase, scheme, 
   const dotCount = Math.max(0, Math.min(5, Math.floor(safePuls * 2)));
 
   const fillOpacity = 0.25 + Math.min(0.5, safePuls * 0.2);
-  const bg = isDark ? '#0F172A' : '#F8FAFC';
+  const bg = isDark ? '#0F172A' : getSurfaces(isDark).inputBg;
 
   // Compact (sidebar): ~2/3 of full size (160x150 vs 240x225)
   const w = compact ? 160 : 240;

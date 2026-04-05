@@ -3,9 +3,9 @@ import { NavLink, Outlet, useOutletContext, useLocation } from 'react-router';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Home, Activity, Sliders, Brain, Settings, ChevronLeft, ChevronRight,
-  Heart, Search, Sun, Moon, X, TrendingUp, AlertCircle, CheckCircle, Clock
+  Search, Sun, Moon, X, TrendingUp, AlertCircle, CheckCircle, Clock
 } from 'lucide-react';
-import { useTheme, getStatusColor, getHealthColor } from '../context/ThemeContext';
+import { useTheme, getSurfaces, getStatusColor, getHealthColor } from '../context/ThemeContext';
 import { HeartLevel1 } from './heart/HeartLevel1';
 import { HeartLevel2 } from './heart/HeartLevel2';
 import { HeartLevel3 } from './heart/HeartLevel3';
@@ -92,14 +92,14 @@ export default function Layout() {
   }, []);
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId);
-  const bg      = isDark ? '#080E1A' : '#F4F6FA';
-  const sidebar = isDark ? '#0C1526' : '#FFFFFF';
-  const border  = isDark ? '#1A2740' : '#E2E8F0';
-  const text    = isDark ? '#E2E8F0' : '#1E293B';
-  // Subtext / secondary labels: medium gray in dark mode, mid-dark gray in light
-  const subtext = isDark ? '#9CA3AF' : '#4B5563';
-  const inputBg = isDark ? '#0A1628' : '#F8FAFC';
-  const muted   = isDark ? '#1E293B' : '#F1F5F9';
+  const s       = getSurfaces(isDark);
+  const bg      = s.bg;
+  const sidebar = s.sidebar;
+  const border  = s.border;
+  const text    = s.text;
+  const subtext = s.subtext;
+  const inputBg = s.inputBg;
+  const muted   = s.muted;
 
   const suggestions = useMemo(() => {
     if (!searchQuery.trim()) return [];
@@ -144,9 +144,11 @@ export default function Layout() {
       >
         {/* Logo — fixed */}
         <div style={{ borderColor: border }} className="flex items-center gap-2.5 px-4 py-4 border-b flex-shrink-0">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ background: scheme.primary }}>
-            <Heart size={16} className="text-white" />
+          <div
+            className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden"
+            style={{ background: s.logoTile }}
+          >
+            <img src="/logo.svg" alt="" className="w-7 h-7 object-contain" width={28} height={28} />
           </div>
           <AnimatedText collapsed={collapsed}>
             <div className="font-heading leading-tight">

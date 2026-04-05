@@ -1,6 +1,46 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { featureConfigs } from '../data/mockData';
 
+/**
+ * Surfaces for main app chrome. Dark mode uses deep blue-blacks; light mode uses
+ * soft blue-gray pastels (not stark white) so brightness feels balanced with dark mode depth.
+ */
+export function getSurfaces(isDark) {
+  if (isDark) {
+    return {
+      bg: '#080E1A',
+      card: '#0C1526',
+      sidebar: '#0C1526',
+      border: '#1A2740',
+      text: '#E2E8F0',
+      subtext: '#9CA3AF',
+      inputBg: '#0A1628',
+      muted: '#1E293B',
+      gridColor: '#1A2740',
+      panelBg: '#0F172A',
+      panelBorder: '#1E293B',
+      sectionBg: '#1E293B',
+      logoTile: '#0f172a',
+    };
+  }
+  return {
+    /* Dimmer blue-gray (~72–78% L): clearly toned down vs near-white */
+    bg: '#B9C2D1',
+    card: '#C4CCD9',
+    sidebar: '#C4CCD9',
+    border: '#98A3B5',
+    text: '#0F172A',
+    subtext: '#3E4A5C',
+    inputBg: '#BFC8D6',
+    muted: '#AEB8C9',
+    gridColor: '#98A3B5',
+    panelBg: '#C4CCD9',
+    panelBorder: '#98A3B5',
+    sectionBg: '#B6C0D0',
+    logoTile: '#BFC8D6',
+  };
+}
+
 export const colorSchemes = [
   {
     id: 'sapphire', name: 'Sapphire', description: 'Deep blue clinical theme',

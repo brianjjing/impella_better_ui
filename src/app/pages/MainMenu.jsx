@@ -6,7 +6,7 @@ import {
   Activity, Sliders, Brain, Heart, ChevronRight, TrendingUp,
   AlertCircle, CheckCircle, Clock, Zap, Shield, BarChart2, Search, X
 } from 'lucide-react';
-import { useTheme, getStatusColor, getHealthColor } from '../context/ThemeContext';
+import { useTheme, getSurfaces, getStatusColor, getHealthColor } from '../context/ThemeContext';
 import { featureKeys, featureConfigs } from '../data/mockData';
 import { useLayoutContext } from '../components/Layout';
 import { HeartLevel3 } from '../components/heart/HeartLevel3';
@@ -126,14 +126,14 @@ export default function MainMenu() {
 
   const features = selectedPatient?.timeline?.[5] ?? {};
 
-  const bg      = isDark ? '#080E1A' : '#F4F6FA';
-  const card    = isDark ? '#0C1526' : '#FFFFFF';
-  const border  = isDark ? '#1A2740' : '#E2E8F0';
-  const text    = isDark ? '#E2E8F0' : '#1E293B';
-  // Subtext: clearly secondary tone
-  const subtext = isDark ? '#9CA3AF' : '#4B5563';
-  const muted   = isDark ? '#1E293B' : '#F1F5F9';
-  const inputBg = isDark ? '#0A1628' : '#F8FAFC';
+  const s       = getSurfaces(isDark);
+  const bg      = s.bg;
+  const card    = s.card;
+  const border  = s.border;
+  const text    = s.text;
+  const subtext = s.subtext;
+  const muted   = s.muted;
+  const inputBg = s.inputBg;
 
   const healthColor = getHealthColor(selectedPatient?.healthScore ?? 50, scheme);
 
