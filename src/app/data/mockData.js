@@ -28,7 +28,7 @@ export const patients = [
     condition: 'Cardiogenic Shock — Post MI',
     diagnosis: 'Anterior STEMI with acute cardiogenic shock',
     deviceLevel: 8, status: 'improving', admissionDate: '2026-02-15',
-    physician: 'Dr. Chen', mrn: 'MRN-004821', healthScore: 62,
+    physician: 'Dr. Chen', mrn: 'MRN-004821',
     timeline: [
       { t: 0, timestamp: ts(0), label: lbl(0), MAP: 64, pumpSpeed: 43500, motorCurrent: 6.8, pumpFlow: 3.1, LVP: 88,  LVEDP: 26, HR: 102, SBP: 88,  DBP: 58, pulsatility: 0.62, tauLV: 58, eseLV: 0.72 },
       { t: 1, timestamp: ts(1), label: lbl(1), MAP: 68, pumpSpeed: 43000, motorCurrent: 6.5, pumpFlow: 3.3, LVP: 84,  LVEDP: 23, HR: 97,  SBP: 93,  DBP: 61, pulsatility: 0.74, tauLV: 55, eseLV: 0.88 },
@@ -43,7 +43,7 @@ export const patients = [
     condition: 'Acute Decompensated Heart Failure',
     diagnosis: 'ADHF with reduced EF (20%), NYHA Class IV',
     deviceLevel: 6, status: 'stable', admissionDate: '2026-02-17',
-    physician: 'Dr. Patel', mrn: 'MRN-007534', healthScore: 48,
+    physician: 'Dr. Patel', mrn: 'MRN-007534',
     timeline: [
       { t: 0, timestamp: ts(0), label: lbl(0), MAP: 70, pumpSpeed: 38000, motorCurrent: 5.4, pumpFlow: 3.2, LVP: 74, LVEDP: 18, HR: 95, SBP: 96,  DBP: 62, pulsatility: 0.88, tauLV: 52, eseLV: 0.94 },
       { t: 1, timestamp: ts(1), label: lbl(1), MAP: 72, pumpSpeed: 37800, motorCurrent: 5.3, pumpFlow: 3.3, LVP: 76, LVEDP: 19, HR: 92, SBP: 98,  DBP: 64, pulsatility: 0.91, tauLV: 51, eseLV: 0.96 },
@@ -58,7 +58,7 @@ export const patients = [
     condition: 'Refractory Cardiogenic Shock',
     diagnosis: 'Multi-vessel CAD with biventricular failure, anuric AKI',
     deviceLevel: 9, status: 'critical', admissionDate: '2026-02-18',
-    physician: 'Dr. Okonkwo', mrn: 'MRN-002198', healthScore: 22,
+    physician: 'Dr. Okonkwo', mrn: 'MRN-002198',
     timeline: [
       { t: 0, timestamp: ts(0), label: lbl(0), MAP: 58, pumpSpeed: 47000, motorCurrent: 7.6, pumpFlow: 2.6, LVP: 98,  LVEDP: 32, HR: 118, SBP: 78, DBP: 50, pulsatility: 0.38, tauLV: 72, eseLV: 0.48 },
       { t: 1, timestamp: ts(1), label: lbl(1), MAP: 55, pumpSpeed: 47500, motorCurrent: 7.8, pumpFlow: 2.5, LVP: 102, LVEDP: 34, HR: 122, SBP: 74, DBP: 48, pulsatility: 0.32, tauLV: 74, eseLV: 0.44 },
@@ -73,7 +73,7 @@ export const patients = [
     condition: 'Myocarditis Recovery (Reference)',
     diagnosis: 'Giant cell myocarditis, post-acute phase',
     deviceLevel: 3, status: 'weaned', admissionDate: '2026-02-10',
-    physician: 'Dr. Chen', mrn: 'MRN-009012', healthScore: 87,
+    physician: 'Dr. Chen', mrn: 'MRN-009012',
     timeline: [
       { t: 0, timestamp: ts(0), label: lbl(0), MAP: 84, pumpSpeed: 26000, motorCurrent: 3.8, pumpFlow: 2.2, LVP: 68, LVEDP: 9, HR: 72, SBP: 118, DBP: 74, pulsatility: 1.82, tauLV: 34, eseLV: 1.92 },
       { t: 1, timestamp: ts(1), label: lbl(1), MAP: 86, pumpSpeed: 25500, motorCurrent: 3.6, pumpFlow: 2.1, LVP: 66, LVEDP: 8, HR: 70, SBP: 120, DBP: 76, pulsatility: 1.92, tauLV: 33, eseLV: 1.98 },

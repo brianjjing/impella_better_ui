@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { useTheme, getHealthColor } from '../../context/ThemeContext';
+import { useTheme, getStatusColor } from '../../context/ThemeContext';
 
-export function HeartLevel2({ features, healthScore }) {
+export function HeartLevel2({ features, status }) {
   const { scheme, isDark } = useTheme();
   const [beat, setBeat] = useState(false);
   const [phase, setPhase] = useState(0);
-  const color = getHealthColor(healthScore, scheme);
+  const color = getStatusColor(status, scheme);
   const bpm = features.HR;
   const interval = Math.round(60000 / Math.max(30, Math.min(180, bpm)));
   const pulsatility = features.pulsatility;
@@ -87,20 +87,6 @@ export function HeartLevel2({ features, healthScore }) {
         ))}
       </div>
 
-      <div className="mt-4">
-        <div className="flex justify-between mb-1">
-          <span style={{ color: subtext }} className="text-xs">Weaning Progress</span>
-          <span style={{ color: color }} className="text-xs font-semibold">{healthScore}%</span>
-        </div>
-        <div style={{ background: bg }} className="h-2 rounded-full overflow-hidden">
-          <motion.div
-            animate={{ width: `${healthScore}%` }}
-            transition={{ duration: 1, ease: 'easeOut' }}
-            style={{ background: `linear-gradient(90deg, ${color}88, ${color})` }}
-            className="h-full rounded-full"
-          />
-        </div>
-      </div>
     </div>
   );
 }

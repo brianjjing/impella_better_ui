@@ -141,8 +141,3 @@ export function getFeatureStatus(value, threshold) {
   return 'critical';
 }
 
-export function getHealthColor(score, scheme) {
-  if (score >= 70) return scheme.good;
-  if (score >= 45) return scheme.warning;
-  return scheme.critical;
-}

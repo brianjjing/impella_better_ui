@@ -6,7 +6,7 @@ import {
   Activity, Sliders, Brain, Heart, ChevronRight, TrendingUp,
   AlertCircle, CheckCircle, Clock, Zap, Shield, BarChart2, Search, X
 } from 'lucide-react';
-import { useTheme, getSurfaces, getStatusColor, getHealthColor } from '../context/ThemeContext';
+import { useTheme, getSurfaces, getStatusColor } from '../context/ThemeContext';
 import { featureKeys, featureConfigs } from '../data/mockData';
 import { useLayoutContext } from '../components/Layout';
 import { HeartLevel3 } from '../components/heart/HeartLevel3';
@@ -135,7 +135,9 @@ export default function MainMenu() {
   const muted   = s.muted;
   const inputBg = s.inputBg;
 
-  const healthColor = getHealthColor(selectedPatient?.healthScore ?? 50, scheme);
+  const patientStatusColor = selectedPatient
+    ? getStatusColor(selectedPatient.status, scheme)
+    : scheme.primary;
 
   const suggestions = useMemo(() => {
     if (!searchQuery.trim()) return [];
@@ -340,23 +342,27 @@ export default function MainMenu() {
                     Attending: {selectedPatient?.physician} · Admitted {selectedPatient?.admissionDate}
                   </p>
                 </div>
-                <div style={{ background: healthColor + '22', color: healthColor }}
-                  className="text-sm font-semibold px-3 py-1 rounded-full">
-                  Score: {selectedPatient?.healthScore}/100
+                <div
+                  style={{
+                    background: patientStatusColor + '22',
+                    color: patientStatusColor,
+                  }}
+                  className="text-sm font-semibold px-3 py-1 rounded-full capitalize">
+                  {selectedPatient?.status}
                 </div>
               </div>
 
               <div className="mb-4 w-full">
                 {heartVariant === 3 && selectedPatient && (
-                  <HeartLevel3 features={features} healthScore={selectedPatient.healthScore} />
+                  <HeartLevel3 features={features} status={selectedPatient.status} />
                 )}
                 {heartVariant === 2 && selectedPatient && (
-                  <HeartLevel2 features={features} healthScore={selectedPatient.healthScore} />
+                  <HeartLevel2 features={features} status={selectedPatient.status} />
                 )}
                 {heartVariant === 1 && selectedPatient && (
                   <div className="py-4">
                     <HeartLevel1
-                      healthScore={selectedPatient.healthScore}
+                      status={selectedPatient.status}
                       heartRate={features?.HR}
                       pulsatility={features?.pulsatility}
                     />

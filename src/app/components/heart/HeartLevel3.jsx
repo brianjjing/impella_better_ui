@@ -1,12 +1,30 @@
 import { useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
-import { useTheme, getHealthColor, getSurfaces } from '../../context/ThemeContext';
+import { useTheme, getStatusColor, getSurfaces } from '../../context/ThemeContext';
 
-export function HeartLevel3({ features, healthScore, compact = false }) {
+/** Gauge sweep 0–1 for arc overlay by clinical status */
+const STATUS_GAUGE = {
+  critical: 0.22,
+  warning: 0.42,
+  stable: 0.58,
+  improving: 0.82,
+  weaned: 1,
+};
+
+const STATUS_HEADLINE = {
+  critical: 'Critical State',
+  warning: 'Warning',
+  stable: 'Stable',
+  improving: 'Improving',
+  weaned: 'Weaned',
+};
+
+export function HeartLevel3({ features, status, compact = false }) {
   const canvasRef = useRef(null);
   const animRef   = useRef(0);
   const { scheme, isDark } = useTheme();
-  const color       = getHealthColor(healthScore, scheme);
+  const color       = getStatusColor(status, scheme);
+  const gaugeFrac   = STATUS_GAUGE[status] ?? 0.55;
   const bpm         = Math.max(30, Math.min(180, features.HR));
   const intervalMs  = 60000 / bpm;
   const pulsatility = features.pulsatility;
@@ -184,7 +202,7 @@ export function HeartLevel3({ features, healthScore, compact = false }) {
       const ax = W - ar - (compact ? 8 : 12);
       const ay = ar + (compact ? 8 : 12);
       ctx.beginPath();
-      ctx.arc(ax, ay, ar, -Math.PI * 0.75, -Math.PI * 0.75 + (healthScore / 100) * Math.PI * 1.5);
+      ctx.arc(ax, ay, ar, -Math.PI * 0.75, -Math.PI * 0.75 + gaugeFrac * Math.PI * 1.5);
       ctx.strokeStyle = color;
       ctx.lineWidth = compact ? 2.5 : 3.5;
       ctx.lineCap = 'round';
@@ -193,13 +211,14 @@ export function HeartLevel3({ features, healthScore, compact = false }) {
       ctx.stroke();
       ctx.shadowBlur = 0;
       ctx.beginPath();
-      ctx.arc(ax, ay, ar, -Math.PI * 0.75 + (healthScore / 100) * Math.PI * 1.5, -Math.PI * 0.75 + Math.PI * 1.5);
+      ctx.arc(ax, ay, ar, -Math.PI * 0.75 + gaugeFrac * Math.PI * 1.5, -Math.PI * 0.75 + Math.PI * 1.5);
       ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
       ctx.lineWidth = compact ? 2 : 3; ctx.stroke();
       ctx.fillStyle = isDark ? '#CBD5E1' : '#1E293B';
-      ctx.font = `${compact ? 9 : 12}px sans-serif`;
+      ctx.font = `${compact ? 8 : 11}px sans-serif`;
       ctx.textAlign = 'center';
-      ctx.fillText(`${healthScore}`, ax, ay + (compact ? 4 : 5));
+      const label = (STATUS_HEADLINE[status] ?? 'Stable').split(' ')[0];
+      ctx.fillText(label, ax, ay + (compact ? 4 : 5));
       ctx.textAlign = 'left';
 
       ctx.fillStyle = isDark ? 'rgba(148,163,184,0.4)' : 'rgba(100,116,139,0.4)';
@@ -211,9 +230,9 @@ export function HeartLevel3({ features, healthScore, compact = false }) {
 
     animRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animRef.current);
-  }, [W, H, bpm, intervalMs, pulsatility, color, scheme.accent, isDark, healthScore, features.pumpSpeed]);
+  }, [W, H, bpm, intervalMs, pulsatility, color, scheme.accent, isDark, status, gaugeFrac, features.pumpSpeed]);
 
-  const statusText = healthScore >= 70 ? 'Stable Recovery' : healthScore >= 45 ? 'Monitoring' : 'Critical State';
+  const statusText = STATUS_HEADLINE[status] ?? 'Stable';
 
   return (
     <div className="relative select-none">

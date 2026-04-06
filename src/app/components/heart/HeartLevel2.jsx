@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { useTheme, getHealthColor, getSurfaces } from '../../context/ThemeContext';
+import { useTheme, getStatusColor, getSurfaces } from '../../context/ThemeContext';
 
-export function HeartLevel2({ features, healthScore, compact = false }) {
+export function HeartLevel2({ features, status, compact = false }) {
   const { scheme, isDark } = useTheme();
   const surfaces = getSurfaces(isDark);
   const [beat, setBeat] = useState(false);
@@ -19,7 +19,7 @@ export function HeartLevel2({ features, healthScore, compact = false }) {
   const map         = safeNumber(features?.MAP, 75);
   const lvedp       = safeNumber(features?.LVEDP, 12);
 
-  const color    = getHealthColor(healthScore, scheme);
+  const color    = getStatusColor(status, scheme);
   const interval = bpm > 0
     ? Math.round(60000 / Math.min(220, bpm))
     : null;
@@ -51,7 +51,6 @@ export function HeartLevel2({ features, healthScore, compact = false }) {
   const lvColor   = lvedp > 18 ? scheme.critical : lvedp > 12 ? scheme.warning : scheme.good;
   const mapColor  = map < 60 ? scheme.critical : map < 70 ? scheme.warning : scheme.good;
 
-  const bg      = isDark ? '#0F172A' : surfaces.inputBg;
   const surface = isDark ? '#1E293B' : surfaces.card;
   const text    = isDark ? '#FFFFFF' : surfaces.text;
   const subtext = surfaces.subtext;
@@ -97,20 +96,6 @@ export function HeartLevel2({ features, healthScore, compact = false }) {
         </motion.div>
       </div>
 
-      <div className="mt-4">
-        <div className="flex justify-between mb-1">
-          <span style={{ color: subtext }} className="text-xs">Weaning Progress</span>
-          <span style={{ color: color }} className="text-xs font-semibold">{healthScore}%</span>
-        </div>
-        <div style={{ background: bg }} className="h-2 rounded-full overflow-hidden">
-          <motion.div
-            animate={{ width: `${healthScore}%` }}
-            transition={{ duration: 1, ease: 'easeOut' }}
-            style={{ background: `linear-gradient(90deg, ${color}88, ${color})` }}
-            className="h-full rounded-full"
-          />
-        </div>
-      </div>
     </div>
   );
 }

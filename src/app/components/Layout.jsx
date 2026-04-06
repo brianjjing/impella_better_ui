@@ -5,7 +5,7 @@ import {
   Home, Activity, Sliders, Brain, Settings, ChevronLeft, ChevronRight,
   Search, Sun, Moon, X, TrendingUp, AlertCircle, CheckCircle, Clock
 } from 'lucide-react';
-import { useTheme, getSurfaces, getStatusColor, getHealthColor } from '../context/ThemeContext';
+import { useTheme, getSurfaces, getStatusColor } from '../context/ThemeContext';
 import { HeartLevel1 } from './heart/HeartLevel1';
 import { HeartLevel2 } from './heart/HeartLevel2';
 import { HeartLevel3 } from './heart/HeartLevel3';
@@ -131,7 +131,6 @@ export default function Layout() {
 
   const selectedSc        = selectedPatient ? getStatusColor(selectedPatient.status, scheme) : subtext;
   const selectedStatusCfg = selectedPatient ? statusConfig[selectedPatient.status] : null;
-  const healthColor       = selectedPatient ? getHealthColor(selectedPatient.healthScore, scheme) : subtext;
 
   return (
     <div style={{ background: bg }} className="flex h-screen w-full overflow-hidden">
@@ -278,7 +277,6 @@ export default function Layout() {
                       <span>{selectedStatusCfg?.label}</span>
                     </span>
                     <span style={{ color: selectedSc }} className="text-xs font-mono font-semibold">P{selectedPatient.deviceLevel}</span>
-                    <span style={{ color: healthColor }} className="text-xs font-mono ml-auto">{selectedPatient.healthScore}</span>
                   </div>
                 </div>
               </div>
@@ -291,7 +289,7 @@ export default function Layout() {
             <div className="px-3 pb-4">
               {heartVariant === 1 && selectedPatient && (
                 <HeartLevel1
-                  healthScore={selectedPatient.healthScore}
+                  status={selectedPatient.status}
                   heartRate={selectedPatient.timeline?.[5]?.HR}
                   pulsatility={selectedPatient.timeline?.[5]?.pulsatility}
                   compact
@@ -300,14 +298,14 @@ export default function Layout() {
               {heartVariant === 2 && selectedPatient && (
                 <HeartLevel2
                   features={selectedPatient.timeline?.[5] ?? {}}
-                  healthScore={selectedPatient.healthScore}
+                  status={selectedPatient.status}
                   compact
                 />
               )}
               {heartVariant === 3 && selectedPatient && (
                 <HeartLevel3
                   features={selectedPatient.timeline?.[5] ?? {}}
-                  healthScore={selectedPatient.healthScore}
+                  status={selectedPatient.status}
                   compact
                 />
               )}

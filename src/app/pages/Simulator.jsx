@@ -681,10 +681,6 @@ export default function Simulator() {
                     <span style={{ color: subtext }} className="text-xs">Status</span>
                     <span className="text-xs font-semibold capitalize" style={{ color: CHART_STATUS.normal }}>{patient?.status}</span>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span style={{ color: subtext }} className="text-xs">Health Score</span>
-                    <span style={{ color: text }} className="text-xs font-mono">{patient?.healthScore}/100</span>
-                  </div>
                 </div>
               </div>
 

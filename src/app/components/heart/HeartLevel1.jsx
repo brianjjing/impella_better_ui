@@ -1,11 +1,19 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { useTheme, getHealthColor } from '../../context/ThemeContext';
+import { useTheme, getStatusColor } from '../../context/ThemeContext';
 
-export function HeartLevel1({ healthScore, heartRate, pulsatility, compact = false }) {
+const STATUS_COPY = {
+  critical:  { label: 'Critical', desc: 'Needs immediate attention' },
+  warning:   { label: 'Warning', desc: 'Close monitoring' },
+  stable:    { label: 'Stable', desc: 'Under observation' },
+  improving: { label: 'Improving', desc: 'Heart recovering well' },
+  weaned:    { label: 'Weaned', desc: 'Recovery on track' },
+};
+
+export function HeartLevel1({ status, heartRate, pulsatility, compact = false }) {
   const { scheme, isDark } = useTheme();
   const [beat, setBeat] = useState(false);
-  const color = getHealthColor(healthScore, scheme);
+  const color = getStatusColor(status, scheme);
   const bpm = Math.max(30, Math.min(180, heartRate));
   const interval = Math.round(60000 / bpm);
 
@@ -20,8 +28,9 @@ export function HeartLevel1({ healthScore, heartRate, pulsatility, compact = fal
   }, [interval]);
 
   const size = compact ? 32 : 56;
-  const statusLabel = healthScore >= 70 ? 'Stable' : healthScore >= 45 ? 'Monitoring' : 'Critical';
-  const statusDesc  = healthScore >= 70 ? 'Heart recovering well' : healthScore >= 45 ? 'Under observation' : 'Needs immediate attention';
+  const copy = STATUS_COPY[status] ?? STATUS_COPY.stable;
+  const statusLabel = copy.label;
+  const statusDesc  = copy.desc;
 
   // Medium gray in dark mode, mid-dark gray in light mode
   const subtext = isDark ? '#9CA3AF' : '#4B5563';

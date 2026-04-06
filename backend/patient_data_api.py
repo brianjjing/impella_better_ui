@@ -68,7 +68,7 @@ def get_patients():
     df["time"] = np.tile(np.arange(T), N)
 
     # 2. Transform to the structure MainMenu expects
-    #    (id, name, deviceLevel, status, healthScore, timeline[0..5] with MAP, HR, etc.)
+    #    (id, name, deviceLevel, status, timeline[0..5] with MAP, HR, etc.)
     patients = []
     for patient_id, pdf in df.groupby("patient_id"):
         pdf = pdf.sort_values("time").tail(6)  # last 6 steps per patient
@@ -104,7 +104,6 @@ def get_patients():
             "admissionDate": "2026-01-01",
             "physician": "Dr. Sins",
             "mrn": f"MRN-{int(patient_id):06d}",
-            "healthScore": 60,           # or compute from features
             "timeline": timeline,
         })
 
