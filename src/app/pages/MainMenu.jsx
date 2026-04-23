@@ -23,6 +23,25 @@ const statusConfig = {
 
 const severityOrder = { critical: 0, warning: 1, stable: 2, improving: 3, weaned: 4 };
 
+/** Keys with `is_*_unstable` in backend/cost_func.py `is_stable()` (lower bound only). */
+const STABILITY_METRIC_KEYS = new Set(['MAP', 'HR', 'pulsatility']);
+
+/** Single-timestep analogue of cost_func.is_stable: unstable if value alone would violate the min rule. */
+function isUnstableForCostStable(metricKey, val) {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return false;
+  if (metricKey === 'MAP') return val < 60;
+  if (metricKey === 'HR') return val < 50;
+  if (metricKey === 'pulsatility') return val < 20;
+  return false;
+}
+
+function stabilityThresholdRangeLabel(metricKey, unit) {
+  if (metricKey === 'MAP') return `≥60 ${unit}`;
+  if (metricKey === 'HR') return `≥50 ${unit}`;
+  if (metricKey === 'pulsatility') return `≥20 ${unit}`;
+  return '';
+}
+
 function formatMetricValue(val) {
   if (typeof val !== 'number' || !Number.isFinite(val)) return '—';
   return val > 100 ? String(Math.round(val)) : val.toFixed(val < 10 ? 2 : 0);
@@ -43,10 +62,9 @@ function MetricPopoverPortal({
 }) {
   const cfg = featureConfigs[metricKey];
   const val = features?.[metricKey];
-  const isOutOfRange = typeof val === 'number' && Number.isFinite(val)
-    && (val < cfg.normalMin || val > cfg.normalMax);
-  const rangeLabel = `${cfg.normalMin}–${cfg.normalMax} ${cfg.unit}`;
-  const rangeTitle = cfg.deviceMetric ? 'Typical operating range' : 'Healthy range';
+  const isOutOfRange = isUnstableForCostStable(metricKey, val);
+  const rangeLabel = stabilityThresholdRangeLabel(metricKey, cfg.unit);
+  const rangeTitle = 'Stability threshold (cost_func is_stable)';
   return createPortal(
     <div
       ref={metricPopoverRef}
@@ -55,6 +73,7 @@ function MetricPopoverPortal({
       style={{
         top: metricPopoverPos.top,
         left: metricPopoverPos.left,
+        transform: metricPopoverPos.placement === 'above' ? 'translateY(-100%)' : 'none',
         background: card,
         borderColor: border,
         boxShadow: `0 12px 40px ${isDark ? '#000000aa' : '#64748b44'}`,
@@ -121,7 +140,7 @@ export default function MainMenu() {
 
   const [metricDetailKey, setMetricDetailKey] = useState(null);
   const [hoveredMetricKey, setHoveredMetricKey] = useState(null);
-  const [metricPopoverPos, setMetricPopoverPos] = useState({ top: 0, left: 0 });
+  const [metricPopoverPos, setMetricPopoverPos] = useState({ top: 0, left: 0, placement: 'below' });
   const metricPopoverRef = useRef(null);
 
   const features = selectedPatient?.timeline?.[5] ?? {};
@@ -180,11 +199,27 @@ export default function MainMenu() {
     const r = el.getBoundingClientRect();
     const pad = 8;
     const popoverWidth = 260;
+    const popoverHeight = 150;
+  
+    // Symmetric gap: same distance from feature card edge in both directions,
+    // expressed as a small percentage of the popover height.
+    const GAP_RATIO = 0.04; // 4% of popover height (~6px at 150px height)
+    const gap = popoverHeight * GAP_RATIO;
+  
     let left = r.left;
+    let top = r.bottom + gap;
+    let placement = 'below';
     if (left + popoverWidth > window.innerWidth - pad) {
       left = Math.max(pad, window.innerWidth - popoverWidth - pad);
     }
-    setMetricPopoverPos({ top: r.bottom + 6, left });
+  
+    // If there is not enough room below (e.g., bottom row), open upward instead.
+    if (top + popoverHeight > window.innerHeight - pad) {
+      top = Math.max(pad, r.top - gap);
+      placement = 'above';
+    }
+  
+    setMetricPopoverPos({ top, left, placement });
     setMetricDetailKey(key);
   };
 
@@ -374,16 +409,35 @@ export default function MainMenu() {
                 {featureKeys.map(key => {
                   const cfg = featureConfigs[key];
                   const val = features?.[key];
-                  const isOutOfRange = typeof val === 'number' && Number.isFinite(val)
-                    && (val < cfg.normalMin || val > cfg.normalMax);
+                  const hasStabilityRule = STABILITY_METRIC_KEYS.has(key);
+                  const isOutOfRange = hasStabilityRule && isUnstableForCostStable(key, val);
                   const numColor = isOutOfRange ? scheme.critical : text;
                   const isOpen = metricDetailKey === key;
                   const isHover = hoveredMetricKey === key;
-                  const metricBoxShadow = isOpen
+                  const metricBoxShadow = hasStabilityRule && (isOpen
                     ? `0 0 0 1px ${scheme.primary}55, 0 8px 28px ${scheme.primary}45`
                     : isHover
                       ? `0 0 0 1px ${scheme.primary}44, 0 4px 20px ${scheme.good}55`
-                      : 'none';
+                      : 'none');
+
+                  if (!hasStabilityRule) {
+                    return (
+                      <div
+                        key={key}
+                        style={{ background: muted }}
+                        className="rounded-lg p-2 text-center w-full border border-transparent"
+                      >
+                        <div style={{ color: subtext }} className="text-[11px] truncate">
+                          {cfg.label.split(' ').slice(0, 2).join(' ')}
+                        </div>
+                        <div className="text-base font-mono font-semibold" style={{ color: numColor }}>
+                          {formatMetricValue(val)}
+                        </div>
+                        <div style={{ color: subtext }} className="text-[11px]">{cfg.unit}</div>
+                      </div>
+                    );
+                  }
+
                   return (
                     <motion.button
                       key={key}

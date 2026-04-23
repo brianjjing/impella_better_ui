@@ -1,4 +1,7 @@
-# Backend API: python -m uvicorn backend.api_initialization:app --reload --port 8000
+# Backend API (use --reload-dir backend so the venv is not watched; otherwise Torch/site-packages
+# changes trigger reloads, the server drops mid-request, and Vite shows ECONNREFUSED on /api/*):
+#   python3 -m uvicorn backend.api_initialization:app --reload --reload-dir backend --host localhost --port 8000
+# Or: npm run dev:backend  (from impella_better_ui)
 # Install: python3 -m pip install -r backend/requirements.txt
 fastapi>=0.100.0
 uvicorn[standard]>=0.22.0

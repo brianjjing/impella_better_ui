@@ -1,4 +1,5 @@
 """Shared FastAPI app setup, CORS, routers, and dataset path resolution."""
+import logging
 import os
 from pathlib import Path
 
@@ -7,6 +8,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 _BACKEND_DIR = Path(__file__).resolve().parent
 _DEFAULT_DATA_PICKLE = _BACKEND_DIR / "10min_1hr_all_data.pkl"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 
 
 def get_data_pickle_path() -> str:
