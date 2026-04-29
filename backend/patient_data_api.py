@@ -1,30 +1,19 @@
 import math
 import logging
-import os
-from pathlib import Path
+
+import torch
 
 from fastapi import APIRouter
 
-from backend.api_initialization import get_data_pickle_path
-from backend.model import WorldModel, pd, np
+from backend.forecast_api import get_forecast_world_model, FEATURE_KEYS
 
 router = APIRouter(tags=["patients"])
 logger = logging.getLogger(__name__)
-_SERVER_DATA_PICKLE = Path("/public/gormpo/10min_1hr_all_data.pkl")
 
-
-def _resolve_patients_data_path() -> str:
-    """Prefer server dataset path when available, then fall back."""
-    env_path = os.environ.get("SMARTWEAN_DATA_PICKLE")
-    if env_path and Path(env_path).is_file():
-        return env_path
-    if _SERVER_DATA_PICKLE.is_file():
-        return str(_SERVER_DATA_PICKLE)
-    return get_data_pickle_path()
+_DEFAULT_PUMP_LEVEL = 6  # P-level used for autoregressive prediction steps
 
 
 def _safe_float(v):
-    """Convert to float for JSON; use None for NaN/Inf (becomes null)."""
     try:
         f = float(v)
         return f if math.isfinite(f) else None
@@ -32,124 +21,106 @@ def _safe_float(v):
         return None
 
 
+def _build_all_timelines(wm):
+    """
+    For every patient in wm.data_train, build a 36-step timeline:
+      - Hour 0 (T-5h): actual first-hour data from the dataset (6 timesteps)
+      - Hours 1–5 (T-4h … T-0h): 5 autoregressive steps via wm.step(), each yielding 6 timesteps
+    Returns a list of lists, outer index = patient index, inner = 36 timeline dicts.
+    """
+    N = wm.data_train.data.shape[0]
+    logger.info("[patients] building timelines for N=%s patients", N)
+
+    # Normalized first-hour states: (N, 6, 12) — data_train.data may be numpy or tensor
+    all_states = torch.as_tensor(wm.data_train.data).to(wm.device).float()
+
+    # Pre-compute normalized pump-level tensor for the constant P-level prediction
+    mean_pl_val = float(wm.mean[-1])
+    std_pl_val = float(wm.std[-1])
+    raw_pl = torch.full((N, wm.forecast_horizon), float(_DEFAULT_PUMP_LEVEL))
+    norm_pl = (raw_pl - mean_pl_val) / std_pl_val
+    norm_pl = norm_pl.to(wm.device)
+
+    # Collect normalized hourly tensors: index 0 = real, 1-5 = predicted
+    hourly_norm = [all_states.cpu()]  # list of (N, 6, 12)
+
+    with torch.no_grad():
+        current = all_states
+        for _ in range(5):
+            next_hour = wm.step(current, norm_pl)  # (N, 6, 12), normalized
+            hourly_norm.append(next_hour.cpu())
+            current = next_hour
+
+    # Unnormalize all hours at once: (6, N, 6, 12) → unnorm per hour
+    hourly_unnorm = []
+    for h_norm in hourly_norm:
+        h_unnorm = wm.unnorm_output(h_norm).numpy()  # (N, 6, 12)
+        hourly_unnorm.append(h_unnorm)
+
+    # Build per-patient timeline lists
+    timelines = []
+    for patient_idx in range(N):
+        timeline = []
+        t_global = 0
+        for h in range(6):
+            hour_offset = 5 - h  # 5, 4, 3, 2, 1, 0
+            hour_data = hourly_unnorm[h][patient_idx]  # (6, 12)
+            for step in range(6):
+                minute = step * 10
+                if minute == 0:
+                    label = f"T-{hour_offset}h"
+                else:
+                    label = f"+{minute}m"
+                entry = {
+                    "t": t_global,
+                    "timestamp": None,
+                    "label": label,
+                }
+                for feat_i, feat_name in enumerate(FEATURE_KEYS):
+                    entry[feat_name] = _safe_float(hour_data[step, feat_i])
+                timeline.append(entry)
+                t_global += 1
+        timelines.append(timeline)
+
+    return timelines
+
+
 @router.get("/patients")
 def get_patients():
     logger.info("[patients] request started")
     try:
-        # 1. Load raw Abiomed data
-        logger.info("[patients] creating WorldModel")
-        world_model = WorldModel(num_features=12, forecast_horizon=11)
+        wm = get_forecast_world_model()
+        logger.info("[patients] world model loaded")
 
-        logger.info("[patients] resolving pickle path")
-        data_path = _resolve_patients_data_path()
-        logger.info("[patients] loading data from path=%s", data_path)
-        world_model.load_data(path=data_path)
-        logger.info("[patients] data loaded into world_model")
+        timelines = _build_all_timelines(wm)
+        N = len(timelines)
 
-        # Converting the data tensor to a pandas df:
-        logger.info("[patients] extracting train tensor")
-        data_tensor = world_model.data_train.data  # torch.Tensor [N, T, F] (normalized)
-        logger.info("[patients] converting tensor to numpy")
-        arr = data_tensor.detach().cpu().numpy()   # → NumPy array
-        N, T, F = arr.shape
-        logger.info("[patients] array shape N=%s T=%s F=%s", N, T, F)
+        # Read p-level (last column) from the first hour to derive a representative deviceLevel
+        first_hour_norm = torch.as_tensor(wm.data_train.data[:, :, -1]).float()  # (N, 6)
+        pl_unnorm = first_hour_norm * float(wm.std[-1]) + float(wm.mean[-1])  # (N, 6)
+        mean_pl = pl_unnorm.mean(dim=1)  # (N,)
+        device_levels = mean_pl.round().clamp(2, 9).int().tolist()
 
-        # Unnormalize: data is stored as (x - mean) / std; reverse to get real units (BPM, mmHg, etc.)
-        logger.info("[patients] reading mean/std")
-        mean_arr = world_model.mean[world_model.columns]
-        std_arr = world_model.std[world_model.columns]
-        if hasattr(mean_arr, "detach"):
-            logger.info("[patients] mean/std are tensors, converting to numpy")
-            mean_arr = mean_arr.detach().cpu().numpy()
-            std_arr = std_arr.detach().cpu().numpy()
-        else:
-            logger.info("[patients] mean/std are not tensors, coercing to numpy arrays")
-            mean_arr = np.asarray(mean_arr)
-            std_arr = np.asarray(std_arr)
-        logger.info("[patients] applying unnormalization")
-        arr = arr * std_arr + mean_arr
-
-        # Name feature columns to match impella_ui / cost_func canonical order:
-        #  0: MAP, 1: pumpSpeed, 2: pumpFlow, 3: LVP, 4: LVEDP, 5: SBP, 6: DBP,
-        #  7: pulsatility, 8: motorCurrent, 9: HR, 10: eseLV, 11: tauLV (raw idx 12)
-        if F == 12:
-            logger.info("[patients] using canonical 12 feature names")
-            feature_names = [
-                "MAP",
-                "pumpSpeed",
-                "pumpFlow",
-                "LVP",
-                "LVEDP",
-                "SBP",
-                "DBP",
-                "pulsatility",
-                "motorCurrent",
-                "HR",
-                "eseLV",
-                "tauLV",
-            ]
-        else:
-            logger.info("[patients] using fallback feature names for F=%s", F)
-            feature_names = [f"feature_{i}" for i in range(F)]
-
-        logger.info("[patients] reshaping into flat dataframe inputs")
-        flat = arr.reshape(N * T, F)
-        df = pd.DataFrame(flat, columns=feature_names)
-        logger.info("[patients] dataframe created rows=%s cols=%s", len(df), len(df.columns))
-
-        # Add synthetic patient_id per (N*T) block so we can group rows into patients.
-        logger.info("[patients] adding patient_id and time columns")
-        df["patient_id"] = np.repeat(np.arange(N), T)
-        df["time"] = np.tile(np.arange(T), N)
-
-        # 2. Transform to the structure MainMenu expects
-        #    (id, name, deviceLevel, status, timeline[0..5] with MAP, HR, etc.)
-        logger.info("[patients] building response objects")
         patients = []
-        for idx, (patient_id, pdf) in enumerate(df.groupby("patient_id")):
-            if idx < 5:
-                logger.info("[patients] processing patient_id=%s", int(patient_id))
-            elif idx == 5:
-                logger.info("[patients] processing additional patients (logs truncated)")
-
-            pdf = pdf.sort_values("time").tail(6)  # last 6 steps per patient
-            timeline = []
-            for i, row in enumerate(pdf.itertuples(index=False)):
-                timeline.append({
-                    "t": i,
-                    "timestamp": None,
-                    "label": f"T-{5 - i}h",
-                    "MAP":        _safe_float(row.MAP),
-                    "pumpSpeed":  _safe_float(row.pumpSpeed),
-                    "motorCurrent": _safe_float(row.motorCurrent),
-                    "pumpFlow":   _safe_float(row.pumpFlow),
-                    "LVP":        _safe_float(row.LVP),
-                    "LVEDP":      _safe_float(row.LVEDP),
-                    "HR":         _safe_float(row.HR),
-                    "SBP":        _safe_float(row.SBP),
-                    "DBP":        _safe_float(row.DBP),
-                    "pulsatility": _safe_float(row.pulsatility),
-                    "tauLV":      _safe_float(row.tauLV),
-                    "eseLV":      _safe_float(row.eseLV),
-                })
-
+        for patient_idx in range(N):
             patients.append({
-                "id": f"P{int(patient_id):03d}",
-                "name": f"Patient {int(patient_id)}",
+                "id": f"P{patient_idx:03d}",
+                "name": f"Patient {patient_idx}",
                 "age": 60,
                 "gender": "U",
                 "condition": "Unknown condition",
                 "diagnosis": "Unknown diagnosis",
-                "deviceLevel": 6,
-                "status": "stable",          # or derive from metrics
+                "deviceLevel": device_levels[patient_idx],
+                "status": "stable",
                 "admissionDate": "2026-01-01",
                 "physician": "Dr. Sins",
-                "mrn": f"MRN-{int(patient_id):06d}",
-                "timeline": timeline,
+                "mrn": f"MRN-{patient_idx:06d}",
+                "timeline": timelines[patient_idx],
             })
 
-        logger.info("[patients] request complete count=%s", len(patients))
+        logger.info("[patients] request complete count=%s", N)
         return patients
+
     except Exception:
         logger.exception("[patients] request failed with unhandled error")
         raise

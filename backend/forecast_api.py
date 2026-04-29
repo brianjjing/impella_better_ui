@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import math
 import os
-import pickle
 import re
 from pathlib import Path
 from typing import Any, List, Optional
@@ -19,6 +18,8 @@ from backend.model import WorldModel
 router = APIRouter(tags=["forecast"])
 
 _BACKEND_DIR = Path(__file__).resolve().parent
+_SERVER_DATA_PICKLE = Path("/public/gormpo/10min_1hr_all_data.pkl")
+_SERVER_WORLD_MODEL_WEIGHTS = Path("/public/gormpo/models/10min_1hr_all_data_model.pth")
 
 FEATURE_KEYS = [
     "MAP",
@@ -52,6 +53,7 @@ def _world_model_weight_candidates() -> list[Path]:
     env = os.environ.get("SMARTWEAN_MODEL_PATH")
     if env:
         out.append(Path(env).expanduser())
+    out.append(_SERVER_WORLD_MODEL_WEIGHTS)
 
     # Same directory as this API (typical drop-in location)
     out.append(_BACKEND_DIR / "10min_1hr_all_data_model.pth")
@@ -68,9 +70,16 @@ def _world_model_weight_candidates() -> list[Path]:
         ]
     )
 
-    # Cluster / legacy default (only used if the file actually exists)
-    out.append(Path("/public/gormpo/models/10min_1hr_all_data_model.pth"))
     return out
+
+
+def _resolve_data_pickle_path() -> str:
+    env = os.environ.get("SMARTWEAN_DATA_PICKLE")
+    if env and Path(env).is_file():
+        return env
+    if _SERVER_DATA_PICKLE.is_file():
+        return str(_SERVER_DATA_PICKLE)
+    return get_data_pickle_path()
 
 
 def _resolve_world_model_weights() -> Path:
@@ -108,7 +117,7 @@ def get_forecast_world_model() -> WorldModel:
     wm = WorldModel(**kwargs)
     path = _resolve_world_model_weights()
     wm.load_model(str(path))
-    wm.load_data(get_data_pickle_path())
+    wm.load_data(_resolve_data_pickle_path())
     _world_model = wm
     return wm
 
@@ -120,25 +129,17 @@ def _parse_patient_index(patient_id: str) -> int:
     return int(m.group(1))
 
 
+_WARMUP_PUMP_LEVEL = 6  # P-level used for the 5-step warmup to reach T-0h state
+
+
 def _initial_state_tensor(wm: WorldModel, patient_idx: int) -> torch.Tensor:
-    """Same 6-step window as /api/patients timeline: last 6 of the first 11 timesteps per sequence."""
-    path = get_data_pickle_path()
-    with open(path, "rb") as f:
-        data = pickle.load(f)
-    train = data["train"]
-    if patient_idx < 0 or patient_idx >= train.shape[0]:
+    """Returns the first-hour normalized state for a patient: shape (6, 12).
+    Consistent with patient_data_api which uses wm.data_train.data directly."""
+    data = wm.data_train.data
+    n = data.shape[0] if hasattr(data, 'shape') else len(data)
+    if patient_idx < 0 or patient_idx >= n:
         raise IndexError("patient index out of range")
-    mean = data["mean"]
-    std = data["std"]
-    # Patient list uses forecast_horizon=11 on TimeSeriesDataset → only the first 11 steps per row.
-    patient_horizon = 11
-    raw = train[patient_idx, :patient_horizon]
-    seq = (raw - mean) / std
-    seq = seq[:, wm.columns]
-    h = wm.forecast_horizon
-    if seq.shape[0] < h:
-        raise ValueError("sequence shorter than forecast horizon")
-    return seq[-h:, :].to(dtype=torch.float32)
+    return torch.as_tensor(data[patient_idx]).to(dtype=torch.float32)
 
 
 class ForecastRequest(BaseModel):
@@ -180,22 +181,36 @@ def post_forecast(body: ForecastRequest) -> ForecastResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    state = state.to(wm.device)
+    # Warm up 5 autoregressive steps (P=_WARMUP_PUMP_LEVEL) to arrive at T-0h,
+    # matching the patient timeline which also rolls out 5 steps from the first real hour.
+    state = state.unsqueeze(0).to(wm.device)  # (1, 6, 12)
     forecast_rows: List[dict] = []
 
+    mean_pl = float(wm.mean[-1])
+    std_pl = float(wm.std[-1])
+    warmup_pl = torch.full((1, wm.forecast_horizon), float(_WARMUP_PUMP_LEVEL))
+    warmup_pl_norm = ((warmup_pl - mean_pl) / std_pl).to(wm.device)
+
     with torch.no_grad():
+        for _ in range(5):
+            state = wm.step(state, warmup_pl_norm)  # (1, 6, 12)
+
+        # Now state = T-0h. Run 6 user-specified hours, each yielding 6 sub-timesteps.
         for hour, p in enumerate(body.p_levels):
-            state = wm.step(state.unsqueeze(0), int(p)).squeeze(0)
-            unnorm = wm.unnorm_output(state.unsqueeze(0)).squeeze(0)
-            row = unnorm[-1].cpu().numpy()
+            state = wm.step(state, int(p))  # (1, 6, 12)
+            unnorm = wm.unnorm_output(state.squeeze(0))  # (6, 12)
+            hour_arr = unnorm.cpu().numpy()
             h = hour + 1
-            entry = {
-                "t": 6 + hour,
-                "label": f"T+{h}h",
-                "timestamp": None,
-            }
-            for i, key in enumerate(FEATURE_KEYS):
-                entry[key] = _safe_float(row[i])
-            forecast_rows.append(entry)
+            for step in range(6):
+                minute = step * 10
+                label = f"T+{h}h" if minute == 0 else f"+{minute}m"
+                entry = {
+                    "t": hour * 6 + step,
+                    "label": label,
+                    "timestamp": None,
+                }
+                for i, key in enumerate(FEATURE_KEYS):
+                    entry[key] = _safe_float(hour_arr[step, i])
+                forecast_rows.append(entry)
 
     return ForecastResponse(patient_id=body.patient_id.upper(), forecast=forecast_rows)

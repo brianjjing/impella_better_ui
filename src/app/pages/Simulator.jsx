@@ -68,22 +68,28 @@ function SimulatorFeatureChart({
       gradientLineWidth: 1.5,
       tension: 0,
       spanGaps: true,
-      pointRadius: 5,
-      pointHoverRadius: 5,
+      pointRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2,
+      pointHoverRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2,
       pointBackgroundColor: ctx => {
         const v = ctx.raw;
         if (v == null || typeof v !== 'number') return 'transparent';
         return continuousSeverityColor(v, thr);
       },
-      pointBorderColor: isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)',
-      pointBorderWidth: 2.25,
+      pointBorderColor: ctx => {
+        if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
+        return isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)';
+      },
+      pointBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
       pointHoverBackgroundColor: ctx => {
         const v = ctx.raw;
         if (v == null || typeof v !== 'number') return 'transparent';
         return continuousSeverityColor(v, thr);
       },
-      pointHoverBorderColor: isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)',
-      pointHoverBorderWidth: 2.25,
+      pointHoverBorderColor: ctx => {
+        if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
+        return isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)';
+      },
+      pointHoverBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
     };
 
     const foreDs = hasResult
@@ -96,47 +102,42 @@ function SimulatorFeatureChart({
           gradientLineWidth: 3,
           tension: 0,
           spanGaps: true,
-          pointRadius: 6,
-          pointHoverRadius: forecastDragEnabled ? 14 : 6,
-          pointHitRadius: forecastDragEnabled ? 20 : 6,
+          pointRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2,
+          pointHoverRadius: forecastDragEnabled
+            ? ctx => labels[ctx.dataIndex]?.startsWith('T') ? 14 : 8
+            : ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2,
+          pointHitRadius: forecastDragEnabled ? 20 : ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2,
           pointBackgroundColor: ctx => {
             const v = ctx.raw;
             if (v == null || typeof v !== 'number') return 'transparent';
             return continuousSeverityColor(v, thr);
           },
-          pointBorderColor: isDark ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.9)',
-          pointBorderWidth: 2.25,
+          pointBorderColor: ctx => {
+            if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
+            return isDark ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.9)';
+          },
+          pointBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
           pointHoverBackgroundColor: ctx => {
             const v = ctx.raw;
             if (v == null || typeof v !== 'number') return 'transparent';
             return continuousSeverityColor(v, thr);
           },
-          pointHoverBorderColor: isDark ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.9)',
-          pointHoverBorderWidth: 2.25,
+          pointHoverBorderColor: ctx => {
+            if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
+            return isDark ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.9)';
+          },
+          pointHoverBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
         }
       : null;
 
     const ann = {};
-    if (hasResult && lastHistLabel && labels.length) {
-      ann.nowLine = {
-        type: 'line',
-        scaleID: 'x',
-        value: lastHistLabel,
-        borderColor: `${subtext}BB`,
-        borderWidth: 2,
-        borderDash: [6, 4],
-        label: {
-          display: true,
-          content: 'Now',
-          position: 'end',
-          color: subtext,
-          font: { size: 9 },
-        },
-      };
+    if (hasResult && histLength > 0 && labels.length > histLength) {
+      // Use numeric indices so repeating sub-step labels ("+10m", "+20m" …) don't confuse Chart.js
+      const boundary = histLength - 0.5;
       ann.forecastBox = {
         type: 'box',
-        xMin: lastHistLabel,
-        xMax: labels[labels.length - 1],
+        xMin: boundary,
+        xMax: labels.length - 1,
         backgroundColor: `${FORECAST_COLOR}28`,
         borderWidth: 0,
       };
@@ -146,7 +147,7 @@ function SimulatorFeatureChart({
       datasets: foreDs ? [histDs, foreDs] : [histDs],
       annotations: ann,
     };
-  }, [combinedData, feature, thr, hasResult, lastHistLabel, labels, isDark, subtext, forecastDragEnabled]);
+  }, [combinedData, feature, thr, hasResult, histLength, labels, isDark, subtext, forecastDragEnabled]);
 
   useEffect(() => {
     if (!forecastDragEnabled || !onForecastPointDrag) return;
@@ -174,7 +175,7 @@ function SimulatorFeatureChart({
       const el = els[0];
       if (el.datasetIndex !== 1 || el.index < hl) return;
       const forecastStepIndex = el.index - hl;
-      if (forecastStepIndex < 0 || forecastStepIndex > 5) return;
+      if (forecastStepIndex < 0 || forecastStepIndex > 35) return;
       e.preventDefault();
       e.stopPropagation();
       try {
@@ -270,8 +271,12 @@ function SimulatorFeatureChart({
       },
       scales: {
         x: {
-          grid: { color: gridColor },
-          ticks: { color: subtext, font: { size: 10 }, maxRotation: 0 },
+          grid: {
+            color: ctx => labels[ctx.index]?.startsWith('T')
+              ? (isDark ? 'rgba(255,255,255,0.4)' : 'rgba(15,23,42,0.25)')
+              : gridColor,
+          },
+          ticks: { color: subtext, font: { size: 10 }, maxRotation: 0, maxTicksLimit: 14 },
           border: { display: false },
         },
         y: {
@@ -281,7 +286,7 @@ function SimulatorFeatureChart({
         },
       },
     }),
-    [annotations, card, border, subtext, gridColor, scheme.primary, thr, isDragging],
+    [annotations, card, border, subtext, gridColor, scheme.primary, thr, isDragging, isDark, labels],
   );
 
   return (
@@ -368,7 +373,7 @@ export default function Simulator() {
     (/** @type {string} */ feat, /** @type {number} */ forecastStepIndex, /** @type {number} */ value) => {
       const rounded = clampForecastDragValue(value);
       setForecastRows(prev => {
-        if (baselineForecastRows.length !== 6 || prev.length !== 6 || !prev[forecastStepIndex]) {
+        if (!baselineForecastRows.length || prev.length !== baselineForecastRows.length || !prev[forecastStepIndex]) {
           return prev.map((row, i) =>
             i === forecastStepIndex && row ? { ...row, [feat]: rounded } : row,
           );
@@ -391,7 +396,7 @@ export default function Simulator() {
 
   const resetFeatureToBaseline = useCallback((/** @type {string} */ feat) => {
     setForecastRows(prev => {
-      if (baselineForecastRows.length !== 6 || prev.length !== 6) return prev;
+      if (!baselineForecastRows.length || prev.length !== baselineForecastRows.length) return prev;
       return prev.map((row, i) => ({
         ...row,
         [feat]: baselineForecastRows[i][feat],
@@ -401,7 +406,7 @@ export default function Simulator() {
 
   const featureHasManualEdits = useCallback(
     (/** @type {string} */ feat) => {
-      if (baselineForecastRows.length !== 6 || forecastRows.length !== 6) return false;
+      if (!baselineForecastRows.length || forecastRows.length !== baselineForecastRows.length) return false;
       return forecastRows.some(
         (row, i) => !forecastNumericClose(row[feat], baselineForecastRows[i][feat]),
       );
@@ -466,7 +471,7 @@ export default function Simulator() {
         const detail = data?.detail ?? res.statusText;
         throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
       }
-      if (!Array.isArray(data.forecast) || data.forecast.length !== 6) {
+      if (!Array.isArray(data.forecast) || data.forecast.length !== 36) {
         throw new Error('Invalid forecast response');
       }
       const rows = data.forecast;
@@ -504,7 +509,7 @@ export default function Simulator() {
         <Sliders size={16} style={{ color: scheme.primary }} />
         <div>
           <h1 style={{ color: text }} className="text-sm font-semibold">Pump Level Simulator</h1>
-          <p style={{ color: subtext }} className="text-xs">Forecast hemodynamic response · T-0 hrs → T+6 hrs</p>
+          <p style={{ color: subtext }} className="text-xs">10-min resolution · forecast 6 hrs from T-0h → T+6h</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <span style={{ color: subtext }} className="text-xs">Patient:</span>
@@ -608,7 +613,7 @@ export default function Simulator() {
                       border={border}
                       scheme={scheme}
                       histLength={patient?.timeline?.length ?? 6}
-                      forecastDragEnabled={hasResult && baselineForecastRows.length === 6}
+                      forecastDragEnabled={hasResult && baselineForecastRows.length === 36}
                       onForecastPointDrag={handleForecastPointDrag}
                     />
                   </div>

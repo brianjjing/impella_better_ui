@@ -22,6 +22,9 @@ from backend.rl_env import AbiomedRLEnv
 from backend.sac import SACPolicy
 
 router = APIRouter(tags=["policy_evaluation"])
+_SERVER_POLICY_WEIGHTS = Path(
+    "/public/gormpo/models/rl/abiomed/realnvp/seed_42_0310_045907-abiomed_mbpo_realnvp/policy_abiomed.pth"
+)
 
 # Mirrors impella_better_ui/src/app/data/mockData.js policyDistributions
 _MOCK_DIST: dict[str, List[float]] = {
@@ -37,6 +40,7 @@ def _policy_path_candidates() -> List[Path]:
     env = os.environ.get("SMARTWEAN_POLICY_PATH")
     if env:
         out.append(Path(env).expanduser())
+    out.append(_SERVER_POLICY_WEIGHTS)
     backend = Path(__file__).resolve().parent
     repo_root = backend.parent.parent
     out.extend(

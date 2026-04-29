@@ -38,25 +38,31 @@ function TimelineFeatureChart({
         severityThreshold: thr,
         gradientLineWidth: pi === 0 ? 2.25 : 1.75,
         tension: 0,
-        pointRadius: 5,
-        pointHoverRadius: 5,
+        pointRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2,
+        pointHoverRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2,
         spanGaps: true,
         pointBackgroundColor: ctx => {
           const v = ctx.raw;
           if (v == null || typeof v !== 'number') return 'transparent';
           return continuousSeverityColor(v, thr);
         },
-        pointBorderColor: isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)',
-        pointBorderWidth: 2.25,
+        pointBorderColor: ctx => {
+          if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
+          return isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)';
+        },
+        pointBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
         pointHoverBackgroundColor: ctx => {
           const v = ctx.raw;
           if (v == null || typeof v !== 'number') return 'transparent';
           return continuousSeverityColor(v, thr);
         },
-        pointHoverBorderColor: isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)',
-        pointHoverBorderWidth: 2.25,
+        pointHoverBorderColor: ctx => {
+          if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
+          return isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)';
+        },
+        pointHoverBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
       })),
-    [mergedData, feature, activePatientsData, thr, isDark],
+    [mergedData, feature, activePatientsData, thr, isDark, labels],
   );
 
   const annotationEntries = useMemo(() => {
@@ -137,8 +143,12 @@ function TimelineFeatureChart({
       },
       scales: {
         x: {
-          grid: { color: gridColor },
-          ticks: { color: subtext, font: { size: 10 }, maxRotation: 0 },
+          grid: {
+            color: ctx => labels[ctx.index]?.startsWith('T')
+              ? (isDark ? 'rgba(255,255,255,0.4)' : 'rgba(15,23,42,0.25)')
+              : gridColor,
+          },
+          ticks: { color: subtext, font: { size: 10 }, maxRotation: 0, maxTicksLimit: 12 },
           border: { display: false },
         },
         y: {
@@ -160,6 +170,8 @@ function TimelineFeatureChart({
       thr,
       patients,
       feature,
+      isDark,
+      labels,
     ],
   );
 
@@ -265,7 +277,7 @@ export default function PatientTimeline() {
       <div style={{ borderColor: border, background: card }} className="border-b px-5 py-3 flex items-center gap-4 flex-shrink-0">
         <div>
           <h1 style={{ color: text }} className="text-sm font-semibold">Patient Timeline</h1>
-          <p style={{ color: subtext }} className="text-xs">Hourly physiological feature history · T-5 hrs → T-0 hrs</p>
+          <p style={{ color: subtext }} className="text-xs">10-min resolution · 6 hrs (real + world-model rollout) · T-5h → T-0h</p>
         </div>
         <div className="h-6 w-px" style={{ background: border }} />
         <div ref={compareSearchRef} className="relative flex items-center gap-2 flex-1 min-w-0 max-w-xl">
