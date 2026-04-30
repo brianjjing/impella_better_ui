@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Bar, Line, Radar } from 'react-chartjs-2';
+import { useSearchParams } from 'react-router';
 import { Activity, Star, BarChart2, TrendingUp, Eye, ArrowDown, ArrowRight, AlertCircle, Award, Coins } from 'lucide-react';
 import { useTheme, getSurfaces } from '../context/ThemeContext';
 import { featureConfigs } from '../data/mockData';
@@ -285,7 +286,14 @@ export default function PolicyEvaluation() {
   const [hoveredBarIndex, setHoveredBarIndex] = useState(null);
   const [policyApi, setPolicyApi] = useState(null);
   const [policyLoading, setPolicyLoading] = useState(false);
-  const [selectedHour, setSelectedHour] = useState(0);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialHour = (() => {
+    const raw = searchParams.get('hour');
+    if (raw == null) return 0;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 0 && n <= 5 ? n : 0;
+  })();
+  const [selectedHour, setSelectedHour] = useState(initialHour);
   /** Set when /api/policy_evaluation fails — UI then falls back to mockData.generateRollouts (placeholder trajectories). */
   const [policyFetchError, setPolicyFetchError] = useState(null);
 
@@ -294,6 +302,27 @@ export default function PolicyEvaluation() {
 
   // T+0h is always available; T+1h..T+5h require a completed simulator run.
   const isHourEnabled = h => h === 0 || simulatorHasResult;
+
+  // Sync URL ?hour= with selected hour so external links (e.g., from the
+  // simulator dot click) preselect the correct hour.
+  useEffect(() => {
+    const raw = searchParams.get('hour');
+    const n = raw == null ? null : parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 0 && n <= 5 && n !== selectedHour && isHourEnabled(n)) {
+      setSelectedHour(n);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, simulatorHasResult]);
+
+  useEffect(() => {
+    const current = searchParams.get('hour');
+    if (current !== String(selectedHour)) {
+      const next = new URLSearchParams(searchParams);
+      next.set('hour', String(selectedHour));
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedHour]);
 
   // If the simulator is reset / cleared while the user is on a forecast hour,
   // snap back to T+0h.
@@ -518,14 +547,14 @@ export default function PolicyEvaluation() {
               bg: scheme.good + '12',
             },
             {
-              label: 'Weaning Score',
-              color: scheme.good,
-              value: hasPolicyData && r1?.finalScore != null ? `${Number(r1.finalScore).toFixed(0)}/100` : '—',
+              label: 'Weaning Direction',
+              color: scheme.primary,
+              value: hasPolicyData ? (weaningDown ? 'Reducing ↓' : 'Maintaining →') : '—',
               desc: hasPolicyData
-                ? 'Final projected weaning score under the recommended protocol'
-                : 'Loads from policy evaluation API',
-              icon: Award,
-              bg: scheme.good + '12',
+                ? (weaningDown ? 'AI recommends reducing pump support' : 'AI recommends maintaining current support')
+                : 'Awaiting API response',
+              icon: hasPolicyData ? (weaningDown ? ArrowDown : ArrowRight) : ArrowRight,
+              bg: scheme.primary + '12',
             },
             {
             label: 'Reward',                                                                                        
@@ -676,8 +705,9 @@ export default function PolicyEvaluation() {
                     );
                   })}
                 </div>
-
-                {/* Action sequence */}
+                  
+                {/* Turn this */}
+                {/* Action sequence
                 <div style={{ background: muted, borderColor: border }} className="mt-4 rounded-lg border p-3">
                   <div style={{ color: subtext }} className="text-xs font-medium mb-2">Projected Pump Level Sequence</div>
                   <div className="flex items-center gap-1.5 flex-wrap min-h-[1.5rem]">
@@ -702,7 +732,7 @@ export default function PolicyEvaluation() {
                       ? `Pump levels at T+1h through T+${r1Steps.length}h under recommended protocol`
                       : 'Loads when policy evaluation data is available'}
                   </div>
-                </div>
+                </div> */}
               </div>
             </motion.div>
           )}

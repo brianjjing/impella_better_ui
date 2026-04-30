@@ -1,7 +1,8 @@
 import { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Line } from 'react-chartjs-2';
-import { Sliders, Play, TrendingUp, TrendingDown, Minus, RotateCcw } from 'lucide-react';
+import { useNavigate } from 'react-router';
+import { Sliders, Play, TrendingUp, TrendingDown, Minus, RotateCcw, Activity, X } from 'lucide-react';
 import { useTheme, getSurfaces } from '../context/ThemeContext';
 import { useSimulatorContext, emptyPumpSequence } from '../context/SimulatorContext';
 import { featureConfigs, featureKeys } from '../data/mockData';
@@ -18,6 +19,16 @@ const FEATURE_GROUPS = [
 /** Vivid amber for forecast series (high contrast on dark/light charts) */
 const FORECAST_COLOR = '#FACC15';
 
+/** Map a chart label like "T+3h" / "T0h" / "T-1h" to a policy_eval hour (0..5), or null. */
+function policyHourFromLabel(label) {
+  if (!label || typeof label !== 'string') return null;
+  if (label === 'T0h') return 0;
+  const m = label.match(/^T\+(\d+)h$/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return n >= 0 && n <= 5 ? n : null;
+}
+
 function SimulatorFeatureChart({
   combinedData,
   feature,
@@ -31,7 +42,14 @@ function SimulatorFeatureChart({
   border,
   scheme,
   histLength,
+  cfgLabel,
+  cfgUnit,
 }) {
+  const navigate = useNavigate();
+  const chartRef = useRef(null);
+  const overlayRef = useRef(null);
+  const [pinnedIdx, setPinnedIdx] = useState(null);
+  const [, forceTick] = useState(0);
   const labels = useMemo(() => combinedData.map(r => r.label), [combinedData]);
 
   const isSeverityColored = ['MAP', 'HR', 'pulsatility'].includes(feature);
@@ -54,6 +72,7 @@ function SimulatorFeatureChart({
       spanGaps: true,
       pointRadius: ctx => !hasResult || labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2.75,
       pointHoverRadius: ctx => !hasResult || labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2.75,
+      pointHitRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 14 : 8,
       pointBackgroundColor: ctx => {
         const v = ctx.raw;
         if (v == null || typeof v !== 'number') return 'transparent';
@@ -89,7 +108,7 @@ function SimulatorFeatureChart({
           spanGaps: true,
           pointRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2.75,
           pointHoverRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2.75,
-          pointHitRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2.75,
+          pointHitRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 14 : 8,
           pointBackgroundColor: ctx => {
             const v = ctx.raw;
             if (v == null || typeof v !== 'number') return 'transparent';
@@ -205,8 +224,151 @@ function SimulatorFeatureChart({
     [annotations, card, border, subtext, gridColor, scheme.primary, thr, isDark, labels],
   );
 
-  return <Line data={{ labels, datasets }} options={options} />;
+  const optionsWithClick = useMemo(
+    () => ({
+      ...options,
+      onClick: (event, _elements, chart) => {
+        const c = chart ?? chartRef.current;
+        if (!c) return;
+        const nativeEvent = event?.native ?? event;
+        // First try a precise hit on a dot. If that misses, snap to the
+        // nearest hour-boundary point so the overlay still surfaces.
+        let els = c.getElementsAtEventForMode(
+          nativeEvent,
+          'nearest',
+          { intersect: true },
+          false,
+        );
+        if (!els.length) {
+          els = c.getElementsAtEventForMode(
+            nativeEvent,
+            'nearest',
+            { intersect: false, axis: 'x' },
+            false,
+          );
+        }
+        if (!els.length) {
+          setPinnedIdx(null);
+          return;
+        }
+        const idx = els[0].index;
+        setPinnedIdx(prev => (prev === idx ? null : idx));
+      },
+    }),
+    [options],
+  );
+
+  // Re-render the overlay after the chart resizes so positions stay in sync.
+  useEffect(() => {
+    const c = chartRef.current;
+    const canvas = c?.canvas;
+    if (!canvas) return;
+    const ro = new ResizeObserver(() => forceTick(t => t + 1));
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, []);
+
+  // Reset pin if the underlying data length changes (e.g. forecast cleared).
+  useEffect(() => {
+    if (pinnedIdx != null && pinnedIdx >= combinedData.length) {
+      setPinnedIdx(null);
+    }
+  }, [combinedData.length, pinnedIdx]);
+
+  let overlay = null;
+  if (pinnedIdx != null && chartRef.current) {
+    const c = chartRef.current;
+    let pt = null;
+    for (let dsi = 0; dsi < c.data.datasets.length; dsi += 1) {
+      const meta = c.getDatasetMeta(dsi);
+      const cand = meta?.data?.[pinnedIdx];
+      if (cand && !cand.skip && Number.isFinite(cand.x) && Number.isFinite(cand.y)) {
+        pt = cand;
+        break;
+      }
+    }
+    if (pt) {
+      const lbl = labels[pinnedIdx];
+      const row = combinedData[pinnedIdx];
+      const isFore = Boolean(row?.isForecast);
+      const valKey = isFore ? `fore_${feature}` : `hist_${feature}`;
+      const v = row?.[valKey];
+      const valueStr = typeof v === 'number' ? v.toFixed(2) : '—';
+      const ph = policyHourFromLabel(lbl);
+      overlay = { x: pt.x, y: pt.y, label: lbl, isForecast: isFore, valueStr, policyHour: ph };
+    }
+  }
+
+  return (
+    <div className="relative w-full h-full">
+      <Line ref={chartRef} data={{ labels, datasets }} options={optionsWithClick} />
+      {overlay && (
+        <div
+          ref={overlayRef}
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            left: overlay.x,
+            top: overlay.y,
+            transform: 'translate(-50%, calc(-100% - 12px))',
+            background: card,
+            borderColor: border,
+            color: subtext,
+            zIndex: 30,
+            minWidth: 180,
+            pointerEvents: 'auto',
+          }}
+          className="rounded-lg border shadow-lg p-2.5 text-xs">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span style={{ color: subtext }} className="font-semibold">
+              {overlay.label} · {overlay.isForecast ? 'forecast' : 'historical'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPinnedIdx(null)}
+              style={{ color: subtext }}
+              aria-label="Close"
+              className="hover:opacity-70 transition-opacity">
+              <X size={12} />
+            </button>
+          </div>
+          <div className="flex items-baseline gap-1.5 mb-2">
+            <span style={{ color: subtext }} className="text-[10px]">{cfgLabel ?? feature}:</span>
+            <span style={{ color: scheme.primary }} className="font-mono font-semibold text-sm">
+              {overlay.valueStr}
+            </span>
+            {cfgUnit && (
+              <span style={{ color: subtext }} className="text-[10px]">{cfgUnit}</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (overlay.policyHour == null) return;
+              navigate(`/policy?hour=${overlay.policyHour}`);
+            }}
+            disabled={overlay.policyHour == null}
+            title={
+              overlay.policyHour == null
+                ? 'Policy evaluation is only available for T+0h through T+5h'
+                : `Open Policy Evaluation at T+${overlay.policyHour}h`
+            }
+            style={{
+              background: overlay.policyHour == null ? border : scheme.primary,
+              color: overlay.policyHour == null ? subtext : 'white',
+              opacity: overlay.policyHour == null ? 0.6 : 1,
+              cursor: overlay.policyHour == null ? 'not-allowed' : 'pointer',
+            }}
+            className="w-full px-2 py-1.5 rounded-md text-[11px] font-semibold flex items-center justify-center gap-1.5">
+            <Activity size={11} />
+            Evaluate Policy
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
+
 
 const P_LEVEL_OPTIONS = [null, 2, 3, 4, 5, 6, 7, 8, 9];
 
@@ -929,6 +1091,8 @@ export default function Simulator() {
                       border={border}
                       scheme={scheme}
                       histLength={patient?.timeline?.length ?? 6}
+                      cfgLabel={cfg.label}
+                      cfgUnit={cfg.unit}
                     />
                   </div>
                 </div>

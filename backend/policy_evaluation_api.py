@@ -1,6 +1,7 @@
 """GET /api/policy_evaluation — SAC policy distribution + rollout (impella_ui parity)."""
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any, List, Literal, Optional
@@ -23,6 +24,7 @@ from backend.rl_env import AbiomedRLEnv
 from backend.sac import SACPolicy
 
 router = APIRouter(tags=["policy_evaluation"])
+logger = logging.getLogger(__name__)
 _SERVER_POLICY_WEIGHTS = Path(
     "/public/gormpo/models/rl/abiomed/realnvp/seed_42_0310_045907-abiomed_mbpo_realnvp/policy_abiomed.pth"
 )
@@ -327,6 +329,11 @@ def get_policy_evaluation(
     if policy_path is None:
         dist = _MOCK_DIST.get(pid, _MOCK_DIST["P001"])
         steps, total_reward, final_score, quality = _mock_rollout_optimal(wm, state)
+        logger.info(
+            "[policy_evaluation] source=mock patient_id=%s hour=%s reason=no_policy_checkpoint_found",
+            pid,
+            hour,
+        )
         rollout = RolloutOut(
             id="R1",
             label="Mock optimal trajectory (no policy checkpoint)",
@@ -348,6 +355,12 @@ def get_policy_evaluation(
     except Exception as e:
         dist = _MOCK_DIST.get(pid, _MOCK_DIST["P001"])
         steps, total_reward, final_score, quality = _mock_rollout_optimal(wm, state)
+        logger.info(
+            "[policy_evaluation] source=mock patient_id=%s hour=%s reason=policy_load_failed error=%s",
+            pid,
+            hour,
+            str(e),
+        )
         rollout = RolloutOut(
             id="R1",
             label="Mock optimal trajectory (policy load failed)",
@@ -376,6 +389,14 @@ def get_policy_evaluation(
     obs2, _ = env2.reset(options={"state": state})
     steps, total_reward, final_score = _rollout_sac(policy, env2, obs2, max_steps=6, deterministic=True)
     quality = _quality_from_reward(total_reward)
+    logger.info(
+        "[policy_evaluation] source=sac patient_id=%s hour=%s policy_path=%s total_reward=%.6f final_score=%.6f",
+        pid,
+        hour,
+        str(policy_path),
+        float(total_reward),
+        float(final_score),
+    )
 
     rollout = RolloutOut(
         id="R1",
