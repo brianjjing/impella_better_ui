@@ -1,10 +1,13 @@
 import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Bar, Line, Radar } from 'react-chartjs-2';
-import { Activity, Star, BarChart2, TrendingUp, Eye, ArrowDown, ArrowRight, AlertCircle } from 'lucide-react';
+import { Activity, Star, BarChart2, TrendingUp, Eye, ArrowDown, ArrowRight, AlertCircle, Award, Coins } from 'lucide-react';
 import { useTheme, getSurfaces } from '../context/ThemeContext';
 import { featureConfigs } from '../data/mockData';
 import { useLayoutContext } from '../components/Layout';
+import { useSimulatorContext } from '../context/SimulatorContext';
+
+const HOUR_OPTIONS = [0, 1, 2, 3, 4, 5];
 
 const PUMP_LABELS  = ['P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9'];
 const KEY_FEATURES = ['MAP', 'HR', 'LVEDP', 'pulsatility'];
@@ -277,12 +280,28 @@ function OutcomeRadarChart({ radarData, scheme, gridColor, subtext, card, border
 export default function PolicyEvaluation() {
   const { scheme, isDark, thresholds } = useTheme();
   const { patients, selectedPatientId } = useLayoutContext();
+  const { getStateFor } = useSimulatorContext();
   const [activeTab, setActiveTab] = useState('distribution');
   const [hoveredBarIndex, setHoveredBarIndex] = useState(null);
   const [policyApi, setPolicyApi] = useState(null);
   const [policyLoading, setPolicyLoading] = useState(false);
+  const [selectedHour, setSelectedHour] = useState(0);
   /** Set when /api/policy_evaluation fails — UI then falls back to mockData.generateRollouts (placeholder trajectories). */
   const [policyFetchError, setPolicyFetchError] = useState(null);
+
+  const simulatorState = getStateFor(selectedPatientId);
+  const simulatorHasResult = Boolean(simulatorState?.hasResult);
+
+  // T+0h is always available; T+1h..T+5h require a completed simulator run.
+  const isHourEnabled = h => h === 0 || simulatorHasResult;
+
+  // If the simulator is reset / cleared while the user is on a forecast hour,
+  // snap back to T+0h.
+  useEffect(() => {
+    if (selectedHour > 0 && !simulatorHasResult) {
+      setSelectedHour(0);
+    }
+  }, [selectedHour, simulatorHasResult]);
 
   const s         = getSurfaces(isDark);
   const bg        = s.bg;
@@ -301,7 +320,14 @@ export default function PolicyEvaluation() {
     setPolicyApi(null);
     setPolicyLoading(true);
     setPolicyFetchError(null);
-    fetch(`/api/policy_evaluation?patient_id=${encodeURIComponent(selectedPatientId)}`)
+    const params = new URLSearchParams({
+      patient_id: selectedPatientId,
+      hour: String(selectedHour),
+    });
+    if (simulatorState?.lastRunPumpSequence?.length === 6) {
+      params.set('p_levels', simulatorState.lastRunPumpSequence.join(','));
+    }
+    fetch(`/api/policy_evaluation?${params.toString()}`)
       .then(async res => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -328,7 +354,7 @@ export default function PolicyEvaluation() {
         if (!cancelled) setPolicyLoading(false);
       });
     return () => { cancelled = true; };
-  }, [selectedPatientId]);
+  }, [selectedPatientId, selectedHour, simulatorState?.lastRunPumpSequence]);
 
   const hasPolicyData = Boolean(
     policyApi?.distribution?.length === 8 && policyApi?.rollout?.steps?.length,
@@ -443,17 +469,44 @@ export default function PolicyEvaluation() {
       {/* Full-width main content (no right sidebar) */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{ background: bg }}>
 
+        {/* Hour selector */}
+        <div className="flex items-stretch gap-2">
+          {HOUR_OPTIONS.map(h => {
+            const enabled = isHourEnabled(h);
+            const active = selectedHour === h;
+            return (
+              <button
+                key={h}
+                type="button"
+                disabled={!enabled}
+                onClick={() => enabled && setSelectedHour(h)}
+                title={
+                  enabled
+                    ? `Evaluate at T+${h}h`
+                    : 'Run the full simulator forecast to enable this hour'
+                }
+                style={{
+                  background: active ? scheme.primary + '22' : (enabled ? card : muted),
+                  borderColor: active ? scheme.primary + '88' : border,
+                  color: active ? scheme.primary : (enabled ? text : subtext),
+                  opacity: enabled ? 1 : 0.5,
+                  cursor: enabled ? 'pointer' : 'not-allowed',
+                }}
+                className="flex-1 px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all">
+                T+{h}h
+              </button>
+            );
+          })}
+        </div>
+        {!simulatorHasResult && (
+          <p style={{ color: subtext }} className="text-xs -mt-2">
+            T+1h…T+5h unlock once the full forecast is run on the Simulator page.
+          </p>
+        )}
+
         {/* Key Metrics Row */}
         <div className="grid grid-cols-3 gap-3">
           {[
-            {
-              label: 'Policy Certainty',
-              color: scheme.accent,
-              value: entropy,
-              desc: hasPolicyData ? 'Higher values indicate greater uncertainty in the recommendation' : 'Loads from policy evaluation API',
-              icon: BarChart2,
-              bg: scheme.accent + '12',
-            },
             {
               label: 'Recommended Pump Level',
               color: scheme.good,
@@ -465,14 +518,24 @@ export default function PolicyEvaluation() {
               bg: scheme.good + '12',
             },
             {
-              label: 'Weaning Direction',
-              color: scheme.primary,
-              value: hasPolicyData ? (weaningDown ? 'Reducing ↓' : 'Maintaining →') : '—',
+              label: 'Weaning Score',
+              color: scheme.good,
+              value: hasPolicyData && r1?.finalScore != null ? `${Number(r1.finalScore).toFixed(0)}/100` : '—',
               desc: hasPolicyData
-                ? (weaningDown ? 'AI recommends reducing pump support' : 'AI recommends maintaining current support')
-                : 'Awaiting API response',
-              icon: hasPolicyData ? (weaningDown ? ArrowDown : ArrowRight) : ArrowRight,
-              bg: scheme.primary + '12',
+                ? 'Final projected weaning score under the recommended protocol'
+                : 'Loads from policy evaluation API',
+              icon: Award,
+              bg: scheme.good + '12',
+            },
+            {
+            label: 'Reward',                                                                                        
+            color: scheme.accent,                                                                                   
+            value: hasPolicyData && r1?.totalReward != null ? Number(r1.totalReward).toFixed(2) : '—',              
+            desc: hasPolicyData
+              ? 'Cumulative reward across the projected trajectory'
+              : 'Awaiting API response',
+            icon: Coins,                                                                                            
+            bg: scheme.accent + '12',                                                                                                                                                            
             },
           ].map(({ label, value, desc, color, icon: Icon, bg: ibg }) => (
             <motion.div key={label}

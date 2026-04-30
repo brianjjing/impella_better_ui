@@ -17,6 +17,7 @@ from backend.forecast_api import (
     _safe_float,
     get_forecast_world_model,
 )
+from backend.cost_func import weaning_score_model_gradient
 from backend.policy_models import ActorProb, Critic, DiagGaussian, MLP
 from backend.rl_env import AbiomedRLEnv
 from backend.sac import SACPolicy
@@ -141,17 +142,21 @@ def _rollout_sac(
     obs: np.ndarray,
     max_steps: int,
     deterministic: bool = True,
-) -> tuple[List[dict[str, Any]], float]:
+) -> tuple[List[dict[str, Any]], float, float]:
     wm = env.world_model
     steps: List[dict[str, Any]] = []
     total_reward = 0.0
     current_obs = obs
+    rollout_states: List[np.ndarray] = []
+    rollout_actions: List[int] = []
     for i in range(max_steps):
+        rollout_states.append(np.asarray(current_obs, dtype=np.float32))
         with torch.no_grad():
             a = policy.sample_action(current_obs, deterministic=deterministic)
         next_obs, r, terminated, truncated, info = env.step(a)
         total_reward += float(r)
         p_level = int(info.get("p_level", 2))
+        rollout_actions.append(p_level)
         row = wm.unnorm_output(env.current_state.unsqueeze(0)).squeeze(0)[-1].detach().cpu().numpy()
         state_dict = {FEATURE_KEYS[j]: _safe_float(row[j]) for j in range(len(FEATURE_KEYS))}
         state_dict["label"] = f"T+{i + 1}h"
@@ -165,7 +170,16 @@ def _rollout_sac(
         current_obs = next_obs
         if terminated or truncated:
             break
-    return steps, total_reward
+    # Match GORMPO_abiomed evaluation metric: rollout weaning score (gradient definition).
+    weaning_score = 0.0
+    if rollout_states and rollout_actions:
+        ws, _slopes = weaning_score_model_gradient(
+            wm,
+            np.asarray(rollout_states, dtype=np.float32),
+            rollout_actions,
+        )
+        weaning_score = float(ws)
+    return steps, total_reward, weaning_score
 
 
 def _quality_from_reward(total_reward: float) -> str:
@@ -174,10 +188,6 @@ def _quality_from_reward(total_reward: float) -> str:
     if total_reward > -0.5:
         return "suboptimal"
     return "adverse"
-
-
-def _final_score_from_reward(total_reward: float) -> float:
-    return float(np.clip(50.0 + total_reward * 14.0, 0.0, 100.0))
 
 
 def _mock_rollout_optimal(wm, state_tensor: torch.Tensor, pump_level: int = 6) -> tuple[List[dict[str, Any]], float, float, str]:
@@ -245,6 +255,16 @@ class PolicyEvaluationResponse(BaseModel):
 @router.get("/policy_evaluation", response_model=PolicyEvaluationResponse)
 def get_policy_evaluation(
     patient_id: str = Query(..., description="Patient id, e.g. P001 (must exist in training split)"),
+    hour: int = Query(
+        0,
+        ge=0,
+        le=5,
+        description="Which T+hour to evaluate from. 0 uses the initial T-1h→T0h state; 1..5 roll the world model forward using `p_levels`.",
+    ),
+    p_levels: Optional[str] = Query(
+        None,
+        description="Comma-separated pump levels (length 6, values 2-9) used to roll the world model forward when hour > 0.",
+    ),
 ) -> PolicyEvaluationResponse:
     try:
         wm = get_forecast_world_model()
@@ -264,6 +284,30 @@ def get_policy_evaluation(
         raise HTTPException(status_code=404, detail="Unknown patient_id for training split") from None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if hour > 0:
+        if not p_levels:
+            raise HTTPException(
+                status_code=400,
+                detail="p_levels query param is required when hour > 0",
+            )
+        try:
+            seq = [int(x) for x in p_levels.split(",") if x != ""]
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"p_levels must be comma-separated integers: {e}") from e
+        if len(seq) < hour:
+            raise HTTPException(
+                status_code=400,
+                detail=f"p_levels must contain at least {hour} entries (got {len(seq)})",
+            )
+        for p in seq[:hour]:
+            if p < 2 or p > 9:
+                raise HTTPException(status_code=400, detail="each p_level must be between 2 and 9")
+        rolled = state.unsqueeze(0)
+        with torch.no_grad():
+            for h in range(hour):
+                rolled = wm.step(rolled, int(seq[h]))
+        state = rolled.squeeze(0).to(wm.device)
 
     pid = patient_id.strip().upper()
     policy_path = _resolve_policy_weights()
@@ -287,8 +331,8 @@ def get_policy_evaluation(
             id="R1",
             label="Mock optimal trajectory (no policy checkpoint)",
             quality=quality,
-            totalReward=round(total_reward, 4),
-            finalScore=round(final_score, 1),
+            totalReward=float(total_reward),
+            finalScore=float(final_score),
             steps=[PolicyStepOut(**s) for s in steps],
         )
         return PolicyEvaluationResponse(
@@ -308,8 +352,8 @@ def get_policy_evaluation(
             id="R1",
             label="Mock optimal trajectory (policy load failed)",
             quality=quality,
-            totalReward=round(total_reward, 4),
-            finalScore=round(final_score, 1),
+            totalReward=float(total_reward),
+            finalScore=float(final_score),
             steps=[PolicyStepOut(**s) for s in steps],
         )
         return PolicyEvaluationResponse(
@@ -330,16 +374,15 @@ def get_policy_evaluation(
         seed=42,
     )
     obs2, _ = env2.reset(options={"state": state})
-    steps, total_reward = _rollout_sac(policy, env2, obs2, max_steps=6, deterministic=True)
+    steps, total_reward, final_score = _rollout_sac(policy, env2, obs2, max_steps=6, deterministic=True)
     quality = _quality_from_reward(total_reward)
-    final_score = _final_score_from_reward(total_reward)
 
     rollout = RolloutOut(
         id="R1",
         label="SAC policy trajectory",
         quality=quality,
-        totalReward=round(total_reward, 4),
-        finalScore=round(final_score, 1),
+        totalReward=float(total_reward),
+        finalScore=float(final_score),
         steps=[PolicyStepOut(**s) for s in steps],
     )
     return PolicyEvaluationResponse(

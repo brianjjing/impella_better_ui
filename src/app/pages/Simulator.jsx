@@ -1,8 +1,9 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Line } from 'react-chartjs-2';
-import { Sliders, Play, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { Sliders, Play, TrendingUp, TrendingDown, Minus, RotateCcw } from 'lucide-react';
 import { useTheme, getSurfaces } from '../context/ThemeContext';
+import { useSimulatorContext, emptyPumpSequence } from '../context/SimulatorContext';
 import { featureConfigs, featureKeys } from '../data/mockData';
 import { CHART_STATUS } from '../constants/chartStatusColors';
 import { continuousSeverityColor } from '../lib/continuousSeverityColor';
@@ -14,24 +15,8 @@ const FEATURE_GROUPS = [
   { label: 'Pump Metrics', keys: ['pumpSpeed', 'motorCurrent', 'pumpFlow', 'tauLV'] },
 ];
 
-const P_LEVELS = [2, 3, 4, 5, 6, 7, 8, 9];
-
-const emptyPumpSequence = () => /** @type {(number|null)[]} */ ([null, null, null, null, null, null]);
-
 /** Vivid amber for forecast series (high contrast on dark/light charts) */
 const FORECAST_COLOR = '#FACC15';
-
-function forecastNumericClose(a, b) {
-  if (typeof a !== 'number' || typeof b !== 'number') return a === b;
-  return Math.abs(a - b) < 0.015;
-}
-
-/** Hemodynamic values cannot go below 0 when dragging forecast points. */
-function clampForecastDragValue(v) {
-  const n = Number(Number(v).toFixed(2));
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, n);
-}
 
 function SimulatorFeatureChart({
   combinedData,
@@ -46,14 +31,12 @@ function SimulatorFeatureChart({
   border,
   scheme,
   histLength,
-  forecastDragEnabled,
-  onForecastPointDrag,
 }) {
-  const chartRef = useRef(/** @type {import('chart.js').Chart | null} */ (null));
-  const dragRef = useRef(/** @type {{ forecastStepIndex: number; pointerId: number } | null} */ (null));
-  const [isDragging, setIsDragging] = useState(false);
-
   const labels = useMemo(() => combinedData.map(r => r.label), [combinedData]);
+
+  const isSeverityColored = ['MAP', 'HR', 'pulsatility'].includes(feature);
+  // A gray slightly darker than the surface subtext, used for non-severity series.
+  const plainLineColor = isDark ? '#6B7280' : '#2A3340';
 
   const { datasets, annotations } = useMemo(() => {
     const histData = combinedData.map(r => r[`hist_${feature}`] ?? null);
@@ -63,33 +46,34 @@ function SimulatorFeatureChart({
       label: 'Historical',
       isForecast: false,
       data: histData,
-      borderWidth: 0,
-      severityThreshold: thr,
-      gradientLineWidth: 1.5,
+      borderWidth: isSeverityColored ? 0 : 1.5,
+      borderColor: isSeverityColored ? undefined : plainLineColor,
+      severityThreshold: isSeverityColored ? thr : null,
+      gradientLineWidth: isSeverityColored ? 1.5 : 0,
       tension: 0,
       spanGaps: true,
-      pointRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2,
-      pointHoverRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2,
+      pointRadius: ctx => !hasResult || labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2.75,
+      pointHoverRadius: ctx => !hasResult || labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2.75,
       pointBackgroundColor: ctx => {
         const v = ctx.raw;
         if (v == null || typeof v !== 'number') return 'transparent';
-        return continuousSeverityColor(v, thr);
+        return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
       },
       pointBorderColor: ctx => {
-        if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
-        return isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)';
+        if (!hasResult || labels[ctx.dataIndex]?.startsWith('T')) return plainLineColor;
+        return 'transparent';
       },
-      pointBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
+      pointBorderWidth: ctx => !hasResult || labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
       pointHoverBackgroundColor: ctx => {
         const v = ctx.raw;
         if (v == null || typeof v !== 'number') return 'transparent';
-        return continuousSeverityColor(v, thr);
+        return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
       },
       pointHoverBorderColor: ctx => {
-        if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
-        return isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)';
+        if (!hasResult || labels[ctx.dataIndex]?.startsWith('T')) return plainLineColor;
+        return 'transparent';
       },
-      pointHoverBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
+      pointHoverBorderWidth: ctx => !hasResult || labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
     };
 
     const foreDs = hasResult
@@ -97,34 +81,33 @@ function SimulatorFeatureChart({
           label: 'Forecast',
           isForecast: true,
           data: foreData,
-          borderWidth: 0,
-          severityThreshold: thr,
-          gradientLineWidth: 3,
+          borderWidth: isSeverityColored ? 0 : 3,
+          borderColor: isSeverityColored ? undefined : plainLineColor,
+          severityThreshold: isSeverityColored ? thr : null,
+          gradientLineWidth: isSeverityColored ? 3 : 0,
           tension: 0,
           spanGaps: true,
-          pointRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2,
-          pointHoverRadius: forecastDragEnabled
-            ? ctx => labels[ctx.dataIndex]?.startsWith('T') ? 14 : 8
-            : ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2,
-          pointHitRadius: forecastDragEnabled ? 20 : ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2,
+          pointRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2.75,
+          pointHoverRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2.75,
+          pointHitRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2.75,
           pointBackgroundColor: ctx => {
             const v = ctx.raw;
             if (v == null || typeof v !== 'number') return 'transparent';
-            return continuousSeverityColor(v, thr);
+            return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
           },
           pointBorderColor: ctx => {
             if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
-            return isDark ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.9)';
+            return plainLineColor;
           },
           pointBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
           pointHoverBackgroundColor: ctx => {
             const v = ctx.raw;
             if (v == null || typeof v !== 'number') return 'transparent';
-            return continuousSeverityColor(v, thr);
+            return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
           },
           pointHoverBorderColor: ctx => {
             if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
-            return isDark ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.9)';
+            return plainLineColor;
           },
           pointHoverBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
         }
@@ -132,11 +115,11 @@ function SimulatorFeatureChart({
 
     const ann = {};
     if (hasResult && histLength > 0 && labels.length > histLength) {
-      // Use numeric indices so repeating sub-step labels ("+10m", "+20m" …) don't confuse Chart.js
-      const boundary = histLength - 0.5;
+      // Box anchors at T0h (the last historical index) so the tinted region
+      // sits flush to the right of the white T0h grid line.
       ann.forecastBox = {
         type: 'box',
-        xMin: boundary,
+        xMin: histLength - 1,
         xMax: labels.length - 1,
         backgroundColor: `${FORECAST_COLOR}28`,
         borderWidth: 0,
@@ -147,80 +130,7 @@ function SimulatorFeatureChart({
       datasets: foreDs ? [histDs, foreDs] : [histDs],
       annotations: ann,
     };
-  }, [combinedData, feature, thr, hasResult, histLength, labels, isDark, subtext, forecastDragEnabled]);
-
-  useEffect(() => {
-    if (!forecastDragEnabled || !onForecastPointDrag) return;
-    const chart = chartRef.current;
-    if (!chart) return;
-    const canvas = chart.canvas;
-    const hl = histLength;
-
-    const valueFromEvent = (/** @type {PointerEvent} */ e) => {
-      const c = chartRef.current;
-      if (!c?.scales?.y) return null;
-      const area = c.chartArea;
-      const rect = canvas.getBoundingClientRect();
-      const yPx = e.clientY - rect.top;
-      const clamped = Math.max(area.top, Math.min(area.bottom, yPx));
-      const v = c.scales.y.getValueForPixel(clamped);
-      return Number.isFinite(v) ? v : null;
-    };
-
-    const onPointerDown = (/** @type {PointerEvent} */ e) => {
-      const c = chartRef.current;
-      if (!c) return;
-      const els = c.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
-      if (!els.length) return;
-      const el = els[0];
-      if (el.datasetIndex !== 1 || el.index < hl) return;
-      const forecastStepIndex = el.index - hl;
-      if (forecastStepIndex < 0 || forecastStepIndex > 35) return;
-      e.preventDefault();
-      e.stopPropagation();
-      try {
-        canvas.setPointerCapture(e.pointerId);
-      } catch {
-        /* ignore */
-      }
-      dragRef.current = { forecastStepIndex, pointerId: e.pointerId };
-      setIsDragging(true);
-      const v = valueFromEvent(e);
-      if (v != null) onForecastPointDrag(feature, forecastStepIndex, v);
-    };
-
-    const onPointerMove = (/** @type {PointerEvent} */ e) => {
-      if (!dragRef.current) return;
-      e.preventDefault();
-      const v = valueFromEvent(e);
-      if (v != null) onForecastPointDrag(feature, dragRef.current.forecastStepIndex, v);
-    };
-
-    const endDrag = (/** @type {PointerEvent} */ e) => {
-      if (!dragRef.current) return;
-      try {
-        if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
-      } catch {
-        /* ignore */
-      }
-      dragRef.current = null;
-      setIsDragging(false);
-    };
-
-    canvas.addEventListener('pointerdown', onPointerDown);
-    canvas.addEventListener('pointermove', onPointerMove);
-    canvas.addEventListener('pointerup', endDrag);
-    canvas.addEventListener('pointercancel', endDrag);
-    canvas.style.touchAction = 'none';
-
-    return () => {
-      canvas.removeEventListener('pointerdown', onPointerDown);
-      canvas.removeEventListener('pointermove', onPointerMove);
-      canvas.removeEventListener('pointerup', endDrag);
-      canvas.removeEventListener('pointercancel', endDrag);
-      canvas.style.touchAction = '';
-    };
-  }, [forecastDragEnabled, onForecastPointDrag, histLength, feature, hasResult, labels.length, combinedData.length]);
+  }, [combinedData, feature, thr, hasResult, histLength, labels, isDark, subtext, isSeverityColored, plainLineColor]);
 
   const options = useMemo(
     () => ({
@@ -235,7 +145,6 @@ function SimulatorFeatureChart({
           annotations,
         },
         tooltip: {
-          enabled: !isDragging,
           mode: 'index',
           intersect: false,
           filter: item => item.raw != null,
@@ -271,12 +180,19 @@ function SimulatorFeatureChart({
       },
       scales: {
         x: {
-          grid: {
-            color: ctx => labels[ctx.index]?.startsWith('T')
-              ? (isDark ? 'rgba(255,255,255,0.4)' : 'rgba(15,23,42,0.25)')
-              : gridColor,
+          grid: { display: false },
+          ticks: {
+            color: subtext,
+            font: { size: 10 },
+            maxRotation: 0,
+            autoSkip: false,
+            callback: (_value, index) => {
+              const lbl = labels[index];
+              if (lbl?.startsWith('T')) return lbl;
+              if (lbl === '+30m') return '+30 min';
+              return undefined;
+            },
           },
-          ticks: { color: subtext, font: { size: 10 }, maxRotation: 0, maxTicksLimit: 14 },
           border: { display: false },
         },
         y: {
@@ -286,67 +202,400 @@ function SimulatorFeatureChart({
         },
       },
     }),
-    [annotations, card, border, subtext, gridColor, scheme.primary, thr, isDragging, isDark, labels],
+    [annotations, card, border, subtext, gridColor, scheme.primary, thr, isDark, labels],
+  );
+
+  return <Line data={{ labels, datasets }} options={options} />;
+}
+
+const P_LEVEL_OPTIONS = [null, 2, 3, 4, 5, 6, 7, 8, 9];
+
+function PLevelDropdown({ value, onChange, card, border, subtext, scheme }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocPointerDown = e => {
+      if (!wrapRef.current?.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocPointerDown);
+    return () => document.removeEventListener('mousedown', onDocPointerDown);
+  }, [open]);
+
+  const display = value == null ? '—' : `P${value}`;
+  const isSet = value != null;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          background: card,
+          borderColor: open ? scheme.primary : border,
+          color: isSet ? scheme.primary : subtext,
+        }}
+        className="w-full px-1.5 py-1 rounded border text-[11px] font-mono font-semibold leading-none transition-colors hover:opacity-90">
+        {display}
+      </button>
+      {open && (
+        <div
+          style={{ background: card, borderColor: border }}
+          className="absolute z-50 left-0 right-0 mt-0.5 rounded border shadow-lg overflow-hidden">
+          {P_LEVEL_OPTIONS.map(p => {
+            const isSelected = p === value;
+            return (
+              <button
+                key={p ?? 'none'}
+                type="button"
+                onClick={() => {
+                  onChange(p);
+                  setOpen(false);
+                }}
+                style={{
+                  color: p == null ? subtext : scheme.primary,
+                  background: isSelected ? scheme.primary + '22' : 'transparent',
+                }}
+                className="block w-full px-1.5 py-1 text-[11px] font-mono font-semibold leading-none text-center hover:opacity-100 hover:bg-black/10">
+                {p == null ? '—' : `P${p}`}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Pinned P-level sequence configuration chart.
+ * X-axis: T+1h … T+6h (6 discrete dots).
+ * Y-axis: 1 (unset) at the bottom, then P2 … P9.
+ * Dots are draggable vertically; each snaps to an integer P-level
+ * (or below P2 → unset). The line connects all six dots.
+ */
+function PLevelConfigChart({
+  pumpSequence,
+  setPumpSequence,
+  isDark,
+  card,
+  border,
+  subtext,
+  scheme,
+  gridColor,
+}) {
+  const chartRef = useRef(/** @type {import('chart.js').Chart | null} */ (null));
+  const dragRef = useRef(/** @type {{ idx: number; pointerId: number } | null} */ (null));
+  const [tickXs, setTickXs] = useState(/** @type {number[]} */ ([]));
+
+  const labels = useMemo(() => ['T+0h', 'T+1h', 'T+2h', 'T+3h', 'T+4h', 'T+5h'], []);
+  // y = 1 represents "not chosen" (sits below P2 at the bottom of the axis).
+  const yValues = useMemo(
+    () => pumpSequence.map(v => (typeof v === 'number' ? v : 1)),
+    [pumpSequence],
+  );
+
+  const data = useMemo(
+    () => ({
+      labels,
+      datasets: [
+        {
+          data: yValues,
+          borderColor: scheme.primary,
+          borderWidth: 2,
+          tension: 0,
+          spanGaps: false,
+          clip: false,
+          pointRadius: 6,
+          pointHoverRadius: 7.5,
+          pointHitRadius: 28,
+          pointBackgroundColor: yValues.map(v =>
+            v <= 1 ? (isDark ? card : '#ffffff') : scheme.primary,
+          ),
+          pointBorderColor: scheme.primary,
+          pointBorderWidth: 1.875,
+        },
+      ],
+    }),
+    [labels, yValues, scheme.primary, card, isDark],
+  );
+
+  const options = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      layout: { padding: { top: 8, bottom: 0, right: 72 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: card,
+          titleColor: subtext,
+          bodyColor: subtext,
+          borderColor: border,
+          borderWidth: 1,
+          padding: 8,
+          callbacks: {
+            title: items => items[0]?.label ?? '',
+            label: ctx => {
+              const v = yValues[ctx.dataIndex];
+              return v <= 1 ? 'Not set — drag up' : `P${v}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: gridColor, lineWidth: 1 },
+          ticks: { display: false },
+          border: { display: false },
+        },
+        y: {
+          min: 1,
+          max: 9,
+          ticks: {
+            color: subtext,
+            font: { size: 10 },
+            stepSize: 1,
+            autoSkip: false,
+            callback: v => (v <= 1 ? '' : `P${v}`),
+          },
+          grid: { color: gridColor, borderDash: [3, 3] },
+          border: { display: false },
+        },
+      },
+    }),
+    [yValues, card, border, subtext, gridColor],
+  );
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const canvas = chart.canvas;
+
+    const valueFromEvent = e => {
+      const c = chartRef.current;
+      if (!c?.scales?.y) return null;
+      const area = c.chartArea;
+      const rect = canvas.getBoundingClientRect();
+      const yPx = e.clientY - rect.top;
+      const clamped = Math.max(area.top, Math.min(area.bottom, yPx));
+      const v = c.scales.y.getValueForPixel(clamped);
+      if (!Number.isFinite(v)) return null;
+      const rounded = Math.round(v);
+      return Math.min(9, Math.max(1, rounded));
+    };
+
+    const indexFromEvent = e => {
+      const c = chartRef.current;
+      if (!c) return -1;
+      const els = c.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
+      return els.length ? els[0].index : -1;
+    };
+
+    const applyValue = (idx, v) => {
+      setPumpSequence(prev => {
+        const n = [...prev];
+        n[idx] = v <= 1 ? null : v;
+        return n;
+      });
+    };
+
+    const onPointerDown = e => {
+      const idx = indexFromEvent(e);
+      if (idx < 0) return;
+      e.preventDefault();
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      dragRef.current = { idx, pointerId: e.pointerId };
+      const v = valueFromEvent(e);
+      if (v != null) applyValue(idx, v);
+    };
+
+    const onPointerMove = e => {
+      if (!dragRef.current) return;
+      e.preventDefault();
+      const v = valueFromEvent(e);
+      if (v != null) applyValue(dragRef.current.idx, v);
+    };
+
+    const endDrag = e => {
+      if (!dragRef.current) return;
+      try {
+        if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      dragRef.current = null;
+    };
+
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+    canvas.style.touchAction = 'none';
+    canvas.style.cursor = 'ns-resize';
+
+    return () => {
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerup', endDrag);
+      canvas.removeEventListener('pointercancel', endDrag);
+      canvas.style.touchAction = '';
+      canvas.style.cursor = '';
+    };
+  }, [setPumpSequence]);
+
+  // Track x-pixel positions of each data point so we can align the dropdown
+  // row directly under each tick. Recomputes on resize.
+  useEffect(() => {
+    const compute = () => {
+      const c = chartRef.current;
+      const canvas = c?.canvas;
+      if (!c?.scales?.x || !canvas) return;
+      const canvasRect = canvas.getBoundingClientRect();
+      const wrap = canvas.parentElement?.parentElement; // canvas → chart wrapper → flex column
+      if (!wrap) return;
+      const wrapRect = wrap.getBoundingClientRect();
+      const offsetLeft = canvasRect.left - wrapRect.left;
+      const xs = labels.map((_, i) => offsetLeft + c.scales.x.getPixelForValue(i));
+      setTickXs(xs);
+    };
+    compute();
+    const c = chartRef.current;
+    const canvas = c?.canvas;
+    if (!canvas) return;
+    const ro = new ResizeObserver(() => requestAnimationFrame(compute));
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, [labels]);
+
+  const handleDropdownChange = useCallback(
+    (idx, newValue) => {
+      setPumpSequence(prev => {
+        const n = [...prev];
+        n[idx] = newValue;
+        return n;
+      });
+    },
+    [setPumpSequence],
   );
 
   return (
-    <Line
-      ref={chartRef}
-      data={{ labels, datasets }}
-      options={options}
-      style={{
-        cursor: forecastDragEnabled ? (isDragging ? 'ns-resize' : 'grab') : undefined,
-      }}
-    />
+    <div className="relative w-full h-full flex flex-col">
+      <div className="flex-1 min-h-0 relative">
+        <Line ref={chartRef} data={data} options={options} />
+      </div>
+      <div className="relative flex-shrink-0" style={{ height: 24 }}>
+        {tickXs.map((x, i) => (
+          <div key={`label-${i}`}
+            className="absolute top-0 bottom-0 flex items-center"
+            style={{ left: x, transform: 'translateX(-50%)' }}>
+            <span style={{ color: subtext }} className="text-[11px] font-medium leading-none whitespace-nowrap">
+              {labels[i]}
+            </span>
+          </div>
+        ))}
+        {tickXs.map((x, i) => (
+          <div key={`drop-${i}`}
+            className="absolute top-0 bottom-0 flex items-center"
+            style={{ left: x + 16, width: 44 }}>
+            <div className="w-full">
+              <PLevelDropdown
+                value={pumpSequence[i]}
+                onChange={v => handleDropdownChange(i, v)}
+                card={card}
+                border={border}
+                subtext={subtext}
+                scheme={scheme}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
 export default function Simulator() {
   const { scheme, isDark, thresholds } = useTheme();
   const { patients, selectedPatientId } = useLayoutContext();
+  const {
+    getStateFor,
+    setStateFor,
+    clearStateFor,
+    selectedGroup,
+    setSelectedGroup,
+  } = useSimulatorContext();
 
   const patient = patients.find(p => p.id === selectedPatientId);
   const currentLevel = patient?.deviceLevel ?? 5;
 
-  const [pumpSequence, setPumpSequence] = useState(emptyPumpSequence);
-  const [isRunning, setIsRunning] = useState(false);
-  const [hasResult, setHasResult] = useState(false);
-  const [forecastRows, setForecastRows] = useState([]);
-  /** Snapshot after last successful API run — used for Reset. */
-  const [baselineForecastRows, setBaselineForecastRows] = useState(/** @type {typeof forecastRows} */ ([]));
-  const [forecastError, setForecastError] = useState(null);
-  /** P-levels (T+1…T+6) for the forecast drawn on the chart — updated only after a successful Run. */
-  const [lastRunPumpSequence, setLastRunPumpSequence] = useState(/** @type {number[] | null} */ (null));
-  const [selectedGroup, setSelectedGroup] = useState(0);
+  // Per-patient state lives in the context so it persists across navigation.
+  const persisted = getStateFor(selectedPatientId);
+  const pumpSequence = persisted?.pumpSequence ?? emptyPumpSequence();
+  const isRunning = persisted?.isRunning ?? false;
+  const hasResult = persisted?.hasResult ?? false;
+  const forecastRows = persisted?.forecastRows ?? [];
+  const forecastError = persisted?.forecastError ?? null;
+  const lastRunPumpSequence = persisted?.lastRunPumpSequence ?? null;
+
+  const setPumpSequence = useCallback(
+    updater => setStateFor(selectedPatientId, prev => ({
+      ...prev,
+      pumpSequence: typeof updater === 'function' ? updater(prev.pumpSequence) : updater,
+    })),
+    [selectedPatientId, setStateFor],
+  );
+  const setIsRunning = useCallback(
+    v => setStateFor(selectedPatientId, prev => ({ ...prev, isRunning: v })),
+    [selectedPatientId, setStateFor],
+  );
+  const setHasResult = useCallback(
+    v => setStateFor(selectedPatientId, prev => ({ ...prev, hasResult: v })),
+    [selectedPatientId, setStateFor],
+  );
+  const setForecastRows = useCallback(
+    updater => setStateFor(selectedPatientId, prev => ({
+      ...prev,
+      forecastRows: typeof updater === 'function' ? updater(prev.forecastRows) : updater,
+    })),
+    [selectedPatientId, setStateFor],
+  );
+  const setForecastError = useCallback(
+    v => setStateFor(selectedPatientId, prev => ({ ...prev, forecastError: v })),
+    [selectedPatientId, setStateFor],
+  );
+  const setLastRunPumpSequence = useCallback(
+    v => setStateFor(selectedPatientId, prev => ({ ...prev, lastRunPumpSequence: v })),
+    [selectedPatientId, setStateFor],
+  );
 
   const canRunForecast = useMemo(
     () => pumpSequence.every(v => typeof v === 'number' && v >= 2 && v <= 9),
     [pumpSequence],
   );
 
+  // Reset persisted run for this patient if the device level changes.
+  const lastDeviceLevelRef = useRef(/** @type {{id: string|null, level: number|null}} */ ({
+    id: null,
+    level: null,
+  }));
   useEffect(() => {
-    setPumpSequence(emptyPumpSequence());
-    setHasResult(false);
-    setForecastRows([]);
-    setBaselineForecastRows([]);
-    setForecastError(null);
-    setLastRunPumpSequence(null);
-  }, [selectedPatientId, patient?.deviceLevel]);
-
-  const pumpLevelControlsRef = useRef(/** @type {HTMLDivElement | null} */ (null));
-  /** Native `<select>` wheel needs non-passive `preventDefault` (React onWheel is often passive). */
-  useEffect(() => {
-    const root = pumpLevelControlsRef.current;
-    if (!root) return;
-    const handler = (/** @type {WheelEvent} */ e) => {
-      e.preventDefault();
+    if (!selectedPatientId) return;
+    const prev = lastDeviceLevelRef.current;
+    if (prev.id === selectedPatientId && prev.level !== patient?.deviceLevel) {
+      clearStateFor(selectedPatientId);
+    }
+    lastDeviceLevelRef.current = {
+      id: selectedPatientId,
+      level: patient?.deviceLevel ?? null,
     };
-    const selects = root.querySelectorAll('select[data-pump-wheel-guard]');
-    selects.forEach(el => el.addEventListener('wheel', handler, { passive: false }));
-    return () => {
-      selects.forEach(el => el.removeEventListener('wheel', handler));
-    };
-  }, []);
+  }, [selectedPatientId, patient?.deviceLevel, clearStateFor]);
 
   const s = getSurfaces(isDark);
   const bg = s.bg;
@@ -369,56 +618,11 @@ export default function Simulator() {
     return lastRunPumpSequence.map(p => `P${p}`).join(' → ');
   }, [lastRunPumpSequence]);
 
-  const handleForecastPointDrag = useCallback(
-    (/** @type {string} */ feat, /** @type {number} */ forecastStepIndex, /** @type {number} */ value) => {
-      const rounded = clampForecastDragValue(value);
-      setForecastRows(prev => {
-        if (!baselineForecastRows.length || prev.length !== baselineForecastRows.length || !prev[forecastStepIndex]) {
-          return prev.map((row, i) =>
-            i === forecastStepIndex && row ? { ...row, [feat]: rounded } : row,
-          );
-        }
-        const baseAt = baselineForecastRows[forecastStepIndex][feat];
-        if (typeof baseAt !== 'number') {
-          return prev.map((row, i) => (i === forecastStepIndex ? { ...row, [feat]: rounded } : row));
-        }
-        const delta = rounded - baseAt;
-        return prev.map((row, i) => {
-          if (i < forecastStepIndex) return row;
-          const b = baselineForecastRows[i][feat];
-          if (typeof b !== 'number') return row;
-          return { ...row, [feat]: clampForecastDragValue(b + delta) };
-        });
-      });
-    },
-    [baselineForecastRows],
-  );
-
-  const resetFeatureToBaseline = useCallback((/** @type {string} */ feat) => {
-    setForecastRows(prev => {
-      if (!baselineForecastRows.length || prev.length !== baselineForecastRows.length) return prev;
-      return prev.map((row, i) => ({
-        ...row,
-        [feat]: baselineForecastRows[i][feat],
-      }));
-    });
-  }, [baselineForecastRows]);
-
-  const featureHasManualEdits = useCallback(
-    (/** @type {string} */ feat) => {
-      if (!baselineForecastRows.length || forecastRows.length !== baselineForecastRows.length) return false;
-      return forecastRows.some(
-        (row, i) => !forecastNumericClose(row[feat], baselineForecastRows[i][feat]),
-      );
-    },
-    [baselineForecastRows, forecastRows],
-  );
-
   const combinedData = useMemo(() => {
     if (!patient) return [];
     const hist = patient.timeline;
     const all = hasResult ? [...hist, ...forecast] : hist;
-    return all.map((step, i) => {
+    const rows = all.map((step, i) => {
       const isFore = i >= hist.length;
       const row = { label: step.label, isForecast: isFore };
       featureKeys.forEach(k => {
@@ -431,26 +635,8 @@ export default function Simulator() {
       });
       return row;
     });
+    return rows;
   }, [patient, forecast, hasResult]);
-
-  const setLevelAt = (index, raw) => {
-    if (raw === '' || raw == null) {
-      setPumpSequence(prev => {
-        const n = [...prev];
-        n[index] = null;
-        return n;
-      });
-      return;
-    }
-    const v = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
-    if (!Number.isFinite(v)) return;
-    const clamped = Math.min(9, Math.max(2, v));
-    setPumpSequence(prev => {
-      const n = [...prev];
-      n[index] = clamped;
-      return n;
-    });
-  };
 
   const runSimulation = async () => {
     if (!canRunForecast || !patient) return;
@@ -476,14 +662,12 @@ export default function Simulator() {
       }
       const rows = data.forecast;
       setForecastRows(rows);
-      setBaselineForecastRows(rows.map((r) => ({ ...r })));
       setLastRunPumpSequence(pumpSequence.map(Number));
       setHasResult(true);
     } catch (e) {
       setForecastError(e instanceof Error ? e.message : 'Forecast failed');
       setHasResult(false);
       setForecastRows([]);
-      setBaselineForecastRows([]);
       setLastRunPumpSequence(null);
     } finally {
       setIsRunning(false);
@@ -502,6 +686,63 @@ export default function Simulator() {
   const activeFeatureKeys = FEATURE_GROUPS[selectedGroup].keys;
   const lastHistLabel = patient?.timeline[patient.timeline.length - 1]?.label;
 
+  // Drag-to-collapse for the pinned pump-level chart at the top.
+  const PUMP_CHART_MIN_HEIGHT = 0;
+  const PUMP_CHART_COLLAPSE_THRESHOLD = 40;
+  const [viewportHeight, setViewportHeight] = useState(
+    () => (typeof window !== 'undefined' ? window.innerHeight : 800),
+  );
+  useEffect(() => {
+    const onResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const PUMP_CHART_MAX_HEIGHT = Math.round(viewportHeight * 0.25);
+  const PUMP_CHART_DEFAULT_HEIGHT = Math.min(260, PUMP_CHART_MAX_HEIGHT);
+  const [pumpChartHeight, setPumpChartHeight] = useState(PUMP_CHART_DEFAULT_HEIGHT);
+  useEffect(() => {
+    setPumpChartHeight(h => (h > PUMP_CHART_MAX_HEIGHT ? PUMP_CHART_MAX_HEIGHT : h));
+  }, [PUMP_CHART_MAX_HEIGHT]);
+  const dragStateRef = useRef(/** @type {{ startY: number; startHeight: number; pointerId: number; target: HTMLElement } | null} */ (null));
+
+  const onDragPointerDown = useCallback(e => {
+    e.preventDefault();
+    const target = e.currentTarget;
+    try { target.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    dragStateRef.current = {
+      startY: e.clientY,
+      startHeight: pumpChartHeight,
+      pointerId: e.pointerId,
+      target,
+    };
+  }, [pumpChartHeight]);
+
+  const onDragPointerMove = useCallback(e => {
+    const s = dragStateRef.current;
+    if (!s) return;
+    e.preventDefault();
+    const dy = e.clientY - s.startY;
+    let next = s.startHeight + dy;
+    if (next < PUMP_CHART_COLLAPSE_THRESHOLD) next = PUMP_CHART_MIN_HEIGHT;
+    next = Math.max(PUMP_CHART_MIN_HEIGHT, Math.min(PUMP_CHART_MAX_HEIGHT, next));
+    setPumpChartHeight(next);
+  }, []);
+
+  const onDragPointerUp = useCallback(e => {
+    const s = dragStateRef.current;
+    if (!s) return;
+    try {
+      if (s.target.hasPointerCapture(e.pointerId)) s.target.releasePointerCapture(e.pointerId);
+    } catch { /* ignore */ }
+    dragStateRef.current = null;
+  }, []);
+
+  const togglePumpChartCollapsed = useCallback(() => {
+    setPumpChartHeight(h => (h <= PUMP_CHART_MIN_HEIGHT ? PUMP_CHART_DEFAULT_HEIGHT : PUMP_CHART_MIN_HEIGHT));
+  }, []);
+
+  const isPumpChartCollapsed = pumpChartHeight <= PUMP_CHART_MIN_HEIGHT;
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
@@ -509,7 +750,7 @@ export default function Simulator() {
         <Sliders size={16} style={{ color: scheme.primary }} />
         <div>
           <h1 style={{ color: text }} className="text-sm font-semibold">Pump Level Simulator</h1>
-          <p style={{ color: subtext }} className="text-xs">10-min resolution · forecast 6 hrs from T-0h → T+6h</p>
+          <p style={{ color: subtext }} className="text-xs">10-min resolution · T-1h → T0h actual · T0h → T+6h forecast</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <span style={{ color: subtext }} className="text-xs">Patient:</span>
@@ -517,10 +758,103 @@ export default function Simulator() {
         </div>
       </div>
 
+      {/* Pinned P-level configuration graph + Run forecast button */}
+      <div
+        style={{ borderColor: border, background: card }}
+        className="flex-shrink-0 border-b">
+        <div className="px-5 pt-4 pb-[7px]">
+          <div className="flex items-start justify-between mb-1">
+            <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold">
+              Pump Level Sequence
+            </div>
+            <div className="flex items-center gap-3 ml-3 flex-shrink-0">
+              {!canRunForecast && !isPumpChartCollapsed && (
+                <span style={{ color: subtext }} className="text-[10px] opacity-75">
+                  Set all six hours to enable Run forecast.
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={togglePumpChartCollapsed}
+                style={{ color: subtext, borderColor: border }}
+                className="text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded border hover:opacity-80 transition-opacity">
+                {isPumpChartCollapsed ? 'Expand' : 'Collapse'}
+              </button>
+            </div>
+          </div>
+
+          {!isPumpChartCollapsed && (
+            <div className="relative w-full" style={{ height: pumpChartHeight }}>
+              <PLevelConfigChart
+                pumpSequence={pumpSequence}
+                setPumpSequence={setPumpSequence}
+                isDark={isDark}
+                card={card}
+                border={border}
+                subtext={subtext}
+                scheme={scheme}
+                gridColor={gridColor}
+              />
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 mt-[7px]">
+            <button
+              type="button"
+              onClick={runSimulation}
+              disabled={isRunning || !canRunForecast}
+              style={{
+                background: canRunForecast && !isRunning ? scheme.primary : muted,
+                color: canRunForecast && !isRunning ? 'white' : subtext,
+                borderColor: border,
+                opacity: isRunning ? 0.85 : 1,
+              }}
+              className="px-5 py-2 rounded-xl font-semibold text-sm flex items-center gap-2 transition-all border">
+              <motion.div
+                animate={{ rotate: isRunning ? 360 : 0 }}
+                transition={{ repeat: isRunning ? Infinity : 0, duration: 0.8, ease: 'linear' }}>
+                <Play size={14} />
+              </motion.div>
+              {isRunning ? 'Simulating…' : 'Run forecast'}
+            </button>
+            {forecastError && (
+              <p style={{ color: CHART_STATUS.warning }} className="text-xs leading-snug">
+                {forecastError}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => clearStateFor(selectedPatientId)}
+              style={{ color: subtext, borderColor: border, background: muted }}
+              className="ml-auto self-end px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 hover:opacity-80 transition-opacity">
+              <RotateCcw size={12} />
+              Reset Simulator
+            </button>
+          </div>
+        </div>
+
+        {/* Drag handle at the bottom of the pump level section. */}
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Drag to resize pump level sequence"
+          onPointerDown={onDragPointerDown}
+          onPointerMove={onDragPointerMove}
+          onPointerUp={onDragPointerUp}
+          onPointerCancel={onDragPointerUp}
+          onDoubleClick={togglePumpChartCollapsed}
+          style={{ touchAction: 'none', cursor: 'ns-resize' }}
+          className="group relative h-2 w-full flex items-center justify-center select-none">
+          <div
+            style={{ background: border }}
+            className="h-1 w-12 rounded-full opacity-60 group-hover:opacity-100 transition-opacity" />
+        </div>
+      </div>
+
       <div className="flex-1 overflow-hidden flex">
         {/* Charts area */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{ background: bg }}>
-          {/* Group tabs + legend */}
+          {/* Group tabs */}
           <div className="flex items-center gap-2 flex-wrap">
             {FEATURE_GROUPS.map((g, i) => (
               <button
@@ -535,24 +869,6 @@ export default function Simulator() {
                 {g.label}
               </button>
             ))}
-            {hasResult && forecastPumpLegend && (
-              <div className="ml-auto flex flex-col items-end gap-1 text-xs max-w-[min(100%,20rem)]">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-5 h-1 rounded flex-shrink-0" style={{ background: scheme.primary, opacity: 0.6 }} />
-                  <span style={{ color: subtext }}>Historical (P{currentLevel})</span>
-                </div>
-                <div className="flex items-center gap-1.5 text-right">
-                  <div
-                    className="w-5 h-1 rounded flex-shrink-0"
-                    style={{ background: FORECAST_COLOR }}
-                    aria-hidden
-                  />
-                  <span style={{ color: FORECAST_COLOR }} className="font-medium leading-snug break-words">
-                    Forecast: {forecastPumpLegend}
-                  </span>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Feature charts */}
@@ -613,66 +929,18 @@ export default function Simulator() {
                       border={border}
                       scheme={scheme}
                       histLength={patient?.timeline?.length ?? 6}
-                      forecastDragEnabled={hasResult && baselineForecastRows.length === 36}
-                      onForecastPointDrag={handleForecastPointDrag}
                     />
                   </div>
-                  {featureHasManualEdits(feature) && (
-                    <div
-                      className="flex justify-end pr-1"
-                      style={{
-                        /* ~1/3 of former pt-10 (~40px); % is of containing block width (CSS) */
-                        paddingTop: '3.33%',
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => resetFeatureToBaseline(feature)}
-                        className="cursor-pointer font-semibold rounded hover:opacity-90 transition-opacity leading-none"
-                        style={{
-                          backgroundColor: card,
-                          border: `1px solid ${border}`,
-                          color: isDark ? bg : '#080E1A',
-                          padding: '2px 7px',
-                          fontSize: '11px',
-                          lineHeight: 1.25,
-                          boxShadow: isDark ? '0 1px 2px rgba(0,0,0,0.25)' : '0 1px 2px rgba(15,23,42,0.08)',
-                        }}
-                      >
-                        Reset
-                      </button>
-                    </div>
-                  )}
                 </div>
               </motion.div>
             );
           })}
 
-          {!hasResult && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              style={{ borderColor: scheme.primary + '44', background: scheme.primary + '0A' }}
-              className="rounded-xl border p-6 text-center">
-              <div style={{ color: scheme.primary }} className="text-sm font-semibold mb-2">
-                6-hour pump sequence
-              </div>
-              <p style={{ color: subtext }} className="text-xs">
-                Choose P2–P9 for each hour (T+1h … T+6h) in the panel, then run forecast.
-              </p>
-            </motion.div>
-          )}
         </div>
 
-        {/* Right Control Panel */}
-        <div className="flex-shrink-0 p-2 pl-0 w-[min(100%,20rem)] min-w-[17.5rem]">
+        {/* Right sidebar: Current State + 6h Summary */}
+        <div className="flex-shrink-0 p-2 pl-0 w-[min(100%,16rem)] min-w-[14rem]">
           <div style={{ background: card, borderColor: border }} className="h-full rounded-2xl border flex flex-col overflow-hidden">
-            {/* <div style={{ borderColor: border }} className="border-b px-4 py-3">
-              <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold">
-                Simulator Controls
-              </div>
-            </div> */}
-
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {/* Current state */}
               <div>
@@ -688,86 +956,6 @@ export default function Simulator() {
                   </div>
                 </div>
               </div>
-
-              {/* Hourly P-level sequence T+1 … T+6 */}
-              <div>
-                <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold mb-2">
-                  Pump Level Simulator (Hourly)
-                </div>
-                <p style={{ color: subtext }} className="text-[10px] opacity-80 mb-2 leading-snug">
-                  Set P2–P9 for each hour. Type a number or use the menu.
-                </p>
-                <div ref={pumpLevelControlsRef} className="space-y-2 mb-3">
-                  {[0, 1, 2, 3, 4, 5].map(i => (
-                    <div key={i} className="flex items-center gap-2">
-                      <span style={{ color: subtext }} className="text-[10px] font-mono w-9 flex-shrink-0">
-                        T+{i + 1}h
-                      </span>
-                      <select
-                        data-pump-wheel-guard
-                        aria-label={`Pump level at T+${i + 1} hour`}
-                        value={pumpSequence[i] == null ? '' : String(pumpSequence[i])}
-                        onChange={e => setLevelAt(i, e.target.value)}
-                        style={{
-                          background: muted,
-                          borderColor: border,
-                          color: text,
-                        }}
-                        className="flex-1 min-w-0 rounded-lg border px-2 py-1.5 text-xs font-mono outline-none focus:ring-1 focus:ring-offset-0">
-                        <option value="">—</option>
-                        {P_LEVELS.map(lvl => (
-                          <option key={lvl} value={lvl}>
-                            P{lvl}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        autoComplete="off"
-                        maxLength={1}
-                        placeholder="—"
-                        aria-label={`Type pump level T+${i + 1}h`}
-                        value={pumpSequence[i] ?? ''}
-                        onChange={e => setLevelAt(i, e.target.value)}
-                        style={{ background: muted, borderColor: border, color: text }}
-                        className="w-14 flex-shrink-0 rounded-lg border px-1.5 py-1.5 text-center text-xs font-mono outline-none"
-                      />
-                    </div>
-                  ))}
-                </div>
-                {!canRunForecast && (
-                  <p style={{ color: subtext }} className="text-[10px] mb-3 opacity-75">
-                    Select all six hours to enable Run forecast.
-                  </p>
-                )}
-              </div>
-
-              {/* Run button */}
-              <button
-                type="button"
-                onClick={runSimulation}
-                disabled={isRunning || !canRunForecast}
-                style={{
-                  background: canRunForecast && !isRunning ? scheme.primary : muted,
-                  color: canRunForecast && !isRunning ? 'white' : subtext,
-                  borderColor: border,
-                  opacity: isRunning ? 0.85 : 1,
-                }}
-                className="w-full py-2.5 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all border">
-                <motion.div
-                  animate={{ rotate: isRunning ? 360 : 0 }}
-                  transition={{ repeat: isRunning ? Infinity : 0, duration: 0.8, ease: 'linear' }}>
-                  <Play size={14} />
-                </motion.div>
-                {isRunning ? 'Simulating…' : 'Run forecast'}
-              </button>
-              {forecastError && (
-                <p style={{ color: CHART_STATUS.warning }} className="text-[10px] leading-snug">
-                  {forecastError}
-                </p>
-              )}
 
               {/* Trend summary */}
               <AnimatePresence>
@@ -810,28 +998,57 @@ export default function Simulator() {
                   </motion.div>
                 )}
               </AnimatePresence>
-            </div>
 
-            {/* Severity Legend */}
-            <div style={{ borderColor: border }} className="border-t p-3">
-              <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold mb-2 opacity-70">Severity</div>
-              <div className="flex gap-2.5 items-stretch mb-2">
-                <div
-                  className="w-2.5 rounded-full flex-shrink-0"
-                  style={{
-                    height: 72,
-                    background: `linear-gradient(to bottom, ${CHART_STATUS.critical} 0%, ${CHART_STATUS.warning} 45%, ${CHART_STATUS.normal} 100%)`,
-                  }}
-                />
-                <div className="flex flex-col justify-between" style={{ height: 72 }}>
-                  <span style={{ color: CHART_STATUS.critical }} className="text-xs font-medium">Critical</span>
-                  <span style={{ color: CHART_STATUS.warning }} className="text-xs font-medium">Warning</span>
-                  <span style={{ color: CHART_STATUS.normal }} className="text-xs font-medium">Normal</span>
+              {/* Chart key */}
+              <div>
+                <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold mb-2">Chart Key</div>
+                <div style={{ background: muted, borderColor: border }} className="rounded-xl border p-3 space-y-2">
+                  <p style={{ color: subtext }} className="text-xs leading-snug">
+                    Lines colored <span style={{ color: CHART_STATUS.normal }} className="font-semibold">green</span>,{' '}
+                    <span style={{ color: CHART_STATUS.warning }} className="font-semibold">yellow</span>, and{' '}
+                    <span style={{ color: CHART_STATUS.critical }} className="font-semibold">red</span> indicate severity.
+                    Other lines have no severity threshold.
+                  </p>
+                  {hasResult && forecastPumpLegend && (
+                    <div className="pt-2 mt-1 border-t space-y-1.5" style={{ borderColor: border }}>
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <div className="w-5 h-1 rounded flex-shrink-0" style={{ background: scheme.primary, opacity: 0.6 }} />
+                        <span style={{ color: subtext }}>Historical (P{currentLevel})</span>
+                      </div>
+                      <div className="flex items-start gap-1.5 text-xs">
+                        <div
+                          className="w-5 h-1 mt-1 rounded flex-shrink-0"
+                          style={{ background: FORECAST_COLOR }}
+                          aria-hidden
+                        />
+                        <span style={{ color: FORECAST_COLOR }} className="font-medium leading-snug break-words">
+                          Forecast: {forecastPumpLegend}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-              <div className="flex items-center gap-2 mt-1">
-                <div className="h-0.5 w-6 rounded" style={{ background: FORECAST_COLOR }} />
-                <span style={{ color: FORECAST_COLOR }} className="text-xs font-medium">Forecast</span>
+
+              {/* Severity legend */}
+              <div>
+                <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold mb-2">Severity</div>
+                <div style={{ background: muted, borderColor: border }} className="rounded-xl border p-3">
+                  <div className="flex gap-2.5 items-stretch">
+                    <div
+                      className="w-2.5 rounded-full flex-shrink-0"
+                      style={{
+                        height: 80,
+                        background: `linear-gradient(to bottom, ${CHART_STATUS.critical} 0%, ${CHART_STATUS.warning} 40%, ${CHART_STATUS.normal} 100%)`,
+                      }}
+                    />
+                    <div className="flex flex-col justify-between" style={{ height: 80 }}>
+                      <span style={{ color: CHART_STATUS.critical }} className="text-xs font-medium">Critical</span>
+                      <span style={{ color: CHART_STATUS.warning }} className="text-xs font-medium">Warning</span>
+                      <span style={{ color: CHART_STATUS.normal }} className="text-xs font-medium">Normal</span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

@@ -10,8 +10,6 @@ from backend.forecast_api import get_forecast_world_model, FEATURE_KEYS
 router = APIRouter(tags=["patients"])
 logger = logging.getLogger(__name__)
 
-_DEFAULT_PUMP_LEVEL = 6  # P-level used for autoregressive prediction steps
-
 
 def _safe_float(v):
     try:
@@ -23,63 +21,40 @@ def _safe_float(v):
 
 def _build_all_timelines(wm):
     """
-    For every patient in wm.data_train, build a 36-step timeline:
-      - Hour 0 (T-5h): actual first-hour data from the dataset (6 timesteps)
-      - Hours 1–5 (T-4h … T-0h): 5 autoregressive steps via wm.step(), each yielding 6 timesteps
-    Returns a list of lists, outer index = patient index, inner = 36 timeline dicts.
+    For every patient in wm.data_train, build a 6-step timeline from the actual
+    observed data window (no autoregressive warmup prediction).
+    Returns a list of lists, outer index = patient index, inner = 6 timeline dicts.
     """
     N = wm.data_train.data.shape[0]
     logger.info("[patients] building timelines for N=%s patients", N)
 
-    # Normalized first-hour states: (N, 6, 12) — data_train.data may be numpy or tensor
+    # Normalized observed states: (N, 6, 12)
     all_states = torch.as_tensor(wm.data_train.data).to(wm.device).float()
 
-    # Pre-compute normalized pump-level tensor for the constant P-level prediction
-    mean_pl_val = float(wm.mean[-1])
-    std_pl_val = float(wm.std[-1])
-    raw_pl = torch.full((N, wm.forecast_horizon), float(_DEFAULT_PUMP_LEVEL))
-    norm_pl = (raw_pl - mean_pl_val) / std_pl_val
-    norm_pl = norm_pl.to(wm.device)
+    # Unnormalize the actual data
+    unnorm = wm.unnorm_output(all_states.cpu()).numpy()  # (N, 6, 12)
 
-    # Collect normalized hourly tensors: index 0 = real, 1-5 = predicted
-    hourly_norm = [all_states.cpu()]  # list of (N, 6, 12)
-
-    with torch.no_grad():
-        current = all_states
-        for _ in range(5):
-            next_hour = wm.step(current, norm_pl)  # (N, 6, 12), normalized
-            hourly_norm.append(next_hour.cpu())
-            current = next_hour
-
-    # Unnormalize all hours at once: (6, N, 6, 12) → unnorm per hour
-    hourly_unnorm = []
-    for h_norm in hourly_norm:
-        h_unnorm = wm.unnorm_output(h_norm).numpy()  # (N, 6, 12)
-        hourly_unnorm.append(h_unnorm)
-
-    # Build per-patient timeline lists
+    # Build per-patient timeline lists (6 sub-steps, actual observed data only)
     timelines = []
     for patient_idx in range(N):
         timeline = []
-        t_global = 0
-        for h in range(6):
-            hour_offset = 5 - h  # 5, 4, 3, 2, 1, 0
-            hour_data = hourly_unnorm[h][patient_idx]  # (6, 12)
-            for step in range(6):
-                minute = step * 10
-                if minute == 0:
-                    label = f"T-{hour_offset}h"
-                else:
-                    label = f"+{minute}m"
-                entry = {
-                    "t": t_global,
-                    "timestamp": None,
-                    "label": label,
-                }
-                for feat_i, feat_name in enumerate(FEATURE_KEYS):
-                    entry[feat_name] = _safe_float(hour_data[step, feat_i])
-                timeline.append(entry)
-                t_global += 1
+        hour_data = unnorm[patient_idx]  # (6, 12)
+        # Historical window spans T-1h → T0h (6 points, conceptually 12 min apart).
+        for step in range(6):
+            if step == 0:
+                label = "T-1h"
+            elif step == 5:
+                label = "T0h"
+            else:
+                label = f"+{step * 12}m"
+            entry = {
+                "t": step,
+                "timestamp": None,
+                "label": label,
+            }
+            for feat_i, feat_name in enumerate(FEATURE_KEYS):
+                entry[feat_name] = _safe_float(hour_data[step, feat_i])
+            timeline.append(entry)
         timelines.append(timeline)
 
     return timelines

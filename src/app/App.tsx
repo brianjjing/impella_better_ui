@@ -1,11 +1,14 @@
 import { RouterProvider } from 'react-router';
 import { router } from './routes';
 import { ThemeProvider } from './context/ThemeContext';
+import { SimulatorProvider } from './context/SimulatorContext';
 
 export default function App() {
   return (
     <ThemeProvider>
-      <RouterProvider router={router} />
+      <SimulatorProvider>
+        <RouterProvider router={router} />
+      </SimulatorProvider>
     </ThemeProvider>
   );
 }

@@ -129,8 +129,6 @@ def _parse_patient_index(patient_id: str) -> int:
     return int(m.group(1))
 
 
-_WARMUP_PUMP_LEVEL = 6  # P-level used for the 5-step warmup to reach T-0h state
-
 
 def _initial_state_tensor(wm: WorldModel, patient_idx: int) -> torch.Tensor:
     """Returns the first-hour normalized state for a patient: shape (6, 12).
@@ -181,29 +179,24 @@ def post_forecast(body: ForecastRequest) -> ForecastResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    # Warm up 5 autoregressive steps (P=_WARMUP_PUMP_LEVEL) to arrive at T-0h,
-    # matching the patient timeline which also rolls out 5 steps from the first real hour.
+    # Use the actual observed data window directly as the initial state (no warmup).
+    # Iteratively predict each of the 6 user-specified hours from this state.
     state = state.unsqueeze(0).to(wm.device)  # (1, 6, 12)
     forecast_rows: List[dict] = []
 
-    mean_pl = float(wm.mean[-1])
-    std_pl = float(wm.std[-1])
-    warmup_pl = torch.full((1, wm.forecast_horizon), float(_WARMUP_PUMP_LEVEL))
-    warmup_pl_norm = ((warmup_pl - mean_pl) / std_pl).to(wm.device)
-
     with torch.no_grad():
-        for _ in range(5):
-            state = wm.step(state, warmup_pl_norm)  # (1, 6, 12)
-
-        # Now state = T-0h. Run 6 user-specified hours, each yielding 6 sub-timesteps.
         for hour, p in enumerate(body.p_levels):
             state = wm.step(state, int(p))  # (1, 6, 12)
             unnorm = wm.unnorm_output(state.squeeze(0))  # (6, 12)
             hour_arr = unnorm.cpu().numpy()
-            h = hour + 1
+            # Each forecast hour: 5 sub-steps (+10m … +50m) followed by the next
+            # hour boundary (T+1h … T+6h). Conceptually 10 min between dots, with
+            # the last forecast dot landing exactly on T+6h.
             for step in range(6):
-                minute = step * 10
-                label = f"T+{h}h" if minute == 0 else f"+{minute}m"
+                if step == 5:
+                    label = f"T+{hour + 1}h"
+                else:
+                    label = f"+{(step + 1) * 10}m"
                 entry = {
                     "t": hour * 6 + step,
                     "label": label,

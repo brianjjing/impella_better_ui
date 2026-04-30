@@ -28,41 +28,44 @@ function TimelineFeatureChart({
 }) {
   const labels = useMemo(() => mergedData.map(d => d.label), [mergedData]);
 
+  const isSeverityColored = ['MAP', 'HR', 'pulsatility'].includes(feature);
+  const plainLineColor = isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)';
+
   const datasets = useMemo(
     () =>
-      activePatientsData.map((p, pi) => ({
-        label: p.name,
-        patientId: p.id,
-        data: mergedData.map(row => row[`${p.id}_${feature}`]),
-        borderWidth: 0,
-        severityThreshold: thr,
-        gradientLineWidth: pi === 0 ? 2.25 : 1.75,
-        tension: 0,
-        pointRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2,
-        pointHoverRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 5 : 2,
-        spanGaps: true,
-        pointBackgroundColor: ctx => {
-          const v = ctx.raw;
-          if (v == null || typeof v !== 'number') return 'transparent';
-          return continuousSeverityColor(v, thr);
-        },
-        pointBorderColor: ctx => {
-          if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
-          return isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)';
-        },
-        pointBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
-        pointHoverBackgroundColor: ctx => {
-          const v = ctx.raw;
-          if (v == null || typeof v !== 'number') return 'transparent';
-          return continuousSeverityColor(v, thr);
-        },
-        pointHoverBorderColor: ctx => {
-          if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
-          return isDark ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)';
-        },
-        pointHoverBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
-      })),
-    [mergedData, feature, activePatientsData, thr, isDark, labels],
+      activePatientsData.map((p, pi) => {
+        const lineW = pi === 0 ? 2.25 : 1.75;
+        return {
+          label: p.name,
+          patientId: p.id,
+          data: mergedData.map(row => row[`${p.id}_${feature}`]),
+          // Severity-gradient features go through the plugin (borderWidth: 0,
+          // gradientLineWidth > 0). Other features render as plain white/text lines.
+          borderWidth: isSeverityColored ? 0 : lineW,
+          borderColor: isSeverityColored ? undefined : plainLineColor,
+          severityThreshold: isSeverityColored ? thr : null,
+          gradientLineWidth: isSeverityColored ? lineW : 0,
+          tension: 0,
+          pointRadius: 5,
+          pointHoverRadius: 5,
+          spanGaps: true,
+          pointBackgroundColor: ctx => {
+            const v = ctx.raw;
+            if (v == null || typeof v !== 'number') return 'transparent';
+            return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
+          },
+          pointBorderColor: plainLineColor,
+          pointBorderWidth: 2.25,
+          pointHoverBackgroundColor: ctx => {
+            const v = ctx.raw;
+            if (v == null || typeof v !== 'number') return 'transparent';
+            return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
+          },
+          pointHoverBorderColor: plainLineColor,
+          pointHoverBorderWidth: 2.25,
+        };
+      }),
+    [mergedData, feature, activePatientsData, thr, isDark, labels, isSeverityColored, plainLineColor],
   );
 
   const annotationEntries = useMemo(() => {
@@ -143,12 +146,19 @@ function TimelineFeatureChart({
       },
       scales: {
         x: {
-          grid: {
-            color: ctx => labels[ctx.index]?.startsWith('T')
-              ? (isDark ? 'rgba(255,255,255,0.4)' : 'rgba(15,23,42,0.25)')
-              : gridColor,
+          grid: { display: false },
+          ticks: {
+            color: subtext,
+            font: { size: 10 },
+            maxRotation: 0,
+            autoSkip: false,
+            callback: (_value, index) => {
+              const lbl = labels[index];
+              if (lbl?.startsWith('T')) return lbl;
+              if (lbl === '+30m') return '+30 min';
+              return undefined;
+            },
           },
-          ticks: { color: subtext, font: { size: 10 }, maxRotation: 0, maxTicksLimit: 12 },
           border: { display: false },
         },
         y: {
@@ -204,8 +214,8 @@ export default function PatientTimeline() {
   const allPatientIds = [selectedPatientId, ...comparisonIds];
   const activePatientsData = allPatientIds.map(id => patients.find(p => p.id === id)).filter(Boolean);
 
-  const mergedData =
-    activePatientsData[0]?.timeline.map((step, idx) => {
+  const mergedData = useMemo(() => {
+    return activePatientsData[0]?.timeline.map((step, idx) => {
       const row = { label: step.label, timestamp: step.timestamp };
       activePatientsData.forEach(p => {
         const s = p.timeline[idx];
@@ -213,6 +223,7 @@ export default function PatientTimeline() {
       });
       return row;
     }) || [];
+  }, [activePatientsData]);
 
   const displayedFeatures = showAllFeatures ? featureKeys : featureKeys.filter(k => expandedFeatures.has(k));
 
@@ -277,7 +288,7 @@ export default function PatientTimeline() {
       <div style={{ borderColor: border, background: card }} className="border-b px-5 py-3 flex items-center gap-4 flex-shrink-0">
         <div>
           <h1 style={{ color: text }} className="text-sm font-semibold">Patient Timeline</h1>
-          <p style={{ color: subtext }} className="text-xs">10-min resolution · 6 hrs (real + world-model rollout) · T-5h → T-0h</p>
+          <p style={{ color: subtext }} className="text-xs">10-min resolution · 1 hr actual observation · T-1h → T0h</p>
         </div>
         <div className="h-6 w-px" style={{ background: border }} />
         <div ref={compareSearchRef} className="relative flex items-center gap-2 flex-1 min-w-0 max-w-xl">
