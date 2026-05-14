@@ -24,6 +24,7 @@ export function SimulatorProvider({ children }) {
     setStatesByPatient(prev => {
       const current = prev[patientId] ?? {
         pumpSequence: emptyPumpSequence(),
+        horizonHours: 6,
         isRunning: false,
         hasResult: false,
         forecastRows: [],

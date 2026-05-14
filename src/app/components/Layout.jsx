@@ -17,8 +17,8 @@ export function useLayoutContext() {
 
 const navItems = [
   { to: '/',          label: 'Overview',    icon: Home },
-  { to: '/policy',    label: 'Policy Eval', icon: Brain },
   { to: '/simulator', label: 'Simulator',   icon: Sliders },
+  { to: '/policy',    label: 'Policy Eval', icon: Brain },
 ];
 
 const severityOrder = { critical: 0, warning: 1, stable: 2, improving: 3, weaned: 4 };

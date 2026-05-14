@@ -144,10 +144,12 @@ export default function PolicyEvaluation() {
 
   const simulatorState = getStateFor(selectedPatientId);
   const simulatorHasResult = Boolean(simulatorState?.hasResult);
+  const horizonHours = simulatorState?.horizonHours ?? 6;
 
-  // Hour 0 is the current patient state and is always available.
-  // Hour 1..Hour 6 evaluate at the corresponding forecast step and require a completed simulator run.
-  const isHourEnabled = h => h === 0 || simulatorHasResult;
+  // Hour 0 is the current patient state and is always available. Hours
+  // 1..horizonHours unlock with a completed simulator run; hours beyond
+  // the horizon stay gated regardless of forecast state.
+  const isHourEnabled = h => h === 0 || (simulatorHasResult && h <= horizonHours);
 
   // Sync URL ?hour= with selected hour so external links (e.g., from the
   // simulator dot click) preselect the correct hour.
@@ -171,12 +173,12 @@ export default function PolicyEvaluation() {
   }, [selectedHour]);
 
   // If the simulator is reset / cleared while the user is on a forecast hour,
-  // snap back to Hour 0 (the always-available current-state evaluation).
+  // or the horizon shrinks below the selected hour, snap back to Hour 0.
   useEffect(() => {
-    if (selectedHour > 0 && !simulatorHasResult) {
+    if (selectedHour > 0 && (!simulatorHasResult || selectedHour > horizonHours)) {
       setSelectedHour(0);
     }
-  }, [selectedHour, simulatorHasResult]);
+  }, [selectedHour, simulatorHasResult, horizonHours]);
 
   const s         = getSurfaces(isDark);
   const bg        = s.bg;
@@ -351,7 +353,12 @@ export default function PolicyEvaluation() {
         </div>
         {!simulatorHasResult && (
           <p style={{ color: subtext }} className="text-xs -mt-2">
-            Hour 1…Hour 6 unlock once the full forecast is run on the Simulator page.
+            Hour 1…Hour {horizonHours} unlock once the full forecast is run on the Simulator page.
+          </p>
+        )}
+        {simulatorHasResult && horizonHours < 6 && (
+          <p style={{ color: subtext }} className="text-xs -mt-2">
+            Hour {horizonHours + 1}{horizonHours + 1 < 6 ? `…Hour 6` : ''} {horizonHours + 1 < 6 ? 'are' : 'is'} outside the simulator horizon.
           </p>
         )}
 

@@ -2,7 +2,7 @@ import { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Line } from 'react-chartjs-2';
 import { useNavigate } from 'react-router';
-import { Sliders, Play, TrendingUp, TrendingDown, Minus, RotateCcw, Activity, X } from 'lucide-react';
+import { Sliders, Play, TrendingUp, TrendingDown, Minus, RotateCcw, Activity, X, ArrowUp, ArrowDown, ArrowRight } from 'lucide-react';
 import { useTheme, getSurfaces } from '../context/ThemeContext';
 import { useSimulatorContext, emptyPumpSequence } from '../context/SimulatorContext';
 import { featureConfigs, featureKeys } from '../data/mockData';
@@ -438,6 +438,118 @@ function PLevelDropdown({ value, onChange, card, border, subtext, scheme }) {
 }
 
 /**
+ * Draggable horizon picker (1..6 hours). Clicking or dragging the track
+ * snaps the thumb to the nearest integer position. Changing the horizon
+ * only affects the simulator display — the underlying pumpSequence in
+ * state is preserved so widening the horizon restores prior P-levels.
+ */
+function HorizonSlider({ value, onChange, scheme, subtext, border, card, muted, isDark }) {
+  const trackRef = useRef(null);
+  const draggingRef = useRef(false);
+
+  const valueFromClientX = clientX => {
+    const track = trackRef.current;
+    if (!track) return value;
+    const rect = track.getBoundingClientRect();
+    if (rect.width <= 0) return value;
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return Math.max(1, Math.min(6, Math.round(ratio * 5) + 1));
+  };
+
+  const handlePointerDown = e => {
+    e.preventDefault();
+    draggingRef.current = true;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    onChange(valueFromClientX(e.clientX));
+  };
+  const handlePointerMove = e => {
+    if (!draggingRef.current) return;
+    onChange(valueFromClientX(e.clientX));
+  };
+  const handlePointerUp = e => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+  };
+
+  const pct = ((value - 1) / 5) * 100;
+  const trackBg = isDark ? '#374151' : '#E5E7EB';
+
+  return (
+    <div className="w-full px-2 select-none">
+      <div className="flex items-center justify-between mb-1">
+        <span style={{ color: subtext }} className="text-[10px] font-semibold uppercase tracking-wider">
+          Horizon
+        </span>
+        <span style={{ color: scheme.primary }} className="text-[11px] font-mono font-semibold">
+          {value} {value === 1 ? 'hour' : 'hours'}
+        </span>
+      </div>
+      <div
+        ref={trackRef}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        className="relative h-6 flex items-center cursor-pointer"
+        style={{ touchAction: 'none' }}>
+        <div className="absolute left-0 right-0 rounded-full" style={{ height: 3, background: trackBg }} />
+        <div
+          className="absolute left-0 rounded-full"
+          style={{ height: 3, width: `${pct}%`, background: scheme.primary }}
+        />
+        {[1, 2, 3, 4, 5, 6].map((n, i) => {
+          const left = (i / 5) * 100;
+          const isActive = n <= value;
+          return (
+            <div
+              key={n}
+              className="absolute rounded-full"
+              style={{
+                left: `${left}%`,
+                transform: 'translate(-50%, -50%)',
+                top: '50%',
+                width: 8,
+                height: 8,
+                background: isActive ? scheme.primary : (muted ?? trackBg),
+                border: `1.5px solid ${isActive ? scheme.primary : subtext}`,
+              }}
+            />
+          );
+        })}
+        <div
+          className="absolute rounded-full pointer-events-none"
+          style={{
+            left: `${pct}%`,
+            transform: 'translate(-50%, -50%)',
+            top: '50%',
+            width: 14,
+            height: 14,
+            background: scheme.primary,
+            border: `2px solid ${card}`,
+            boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+          }}
+        />
+      </div>
+      <div className="relative h-4 mt-0.5">
+        {[1, 2, 3, 4, 5, 6].map((n, i) => (
+          <div
+            key={n}
+            className="absolute"
+            style={{ left: `${(i / 5) * 100}%`, transform: 'translateX(-50%)' }}>
+            <span
+              style={{ color: n === value ? scheme.primary : subtext }}
+              className="text-[10px] font-mono font-semibold">
+              {n}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Pinned P-level sequence configuration chart.
  * X-axis: Hour 0 (current, non-configurable, from patient.deviceLevel)
  *         followed by Hour 1 … Hour 6 (6 draggable dots).
@@ -449,6 +561,7 @@ function PLevelConfigChart({
   pumpSequence,
   setPumpSequence,
   currentLevel,
+  horizonHours,
   isDark,
   card,
   border,
@@ -459,17 +572,38 @@ function PLevelConfigChart({
   const chartRef = useRef(/** @type {import('chart.js').Chart | null} */ (null));
   const dragRef = useRef(/** @type {{ idx: number; pointerId: number } | null} */ (null));
   const [tickXs, setTickXs] = useState(/** @type {number[]} */ ([]));
+  // Constant blink for the 6 configurable dots — matches HeartLevel1's brief
+  // "beat" pattern but at a fixed cadence shared across all patients.
+  const [beat, setBeat] = useState(false);
+  useEffect(() => {
+    const pulse = () => {
+      setBeat(true);
+      setTimeout(() => setBeat(false), 150);
+    };
+    pulse();
+    const id = setInterval(pulse, 900);
+    return () => clearInterval(id);
+  }, []);
 
+  // Clamp horizon to the supported range (1..6). The chart shows Hour 0
+  // plus `horizon` configurable hours; pumpSequence stays length-6 in state
+  // so the values outside the horizon are preserved if the user widens it.
+  const horizon = Math.max(1, Math.min(6, typeof horizonHours === 'number' ? horizonHours : 6));
   const labels = useMemo(
-    () => ['Hour 0', 'Hour 1', 'Hour 2', 'Hour 3', 'Hour 4', 'Hour 5', 'Hour 6'],
-    [],
+    () => ['Hour 0', ...Array.from({ length: horizon }, (_, i) => `Hour ${i + 1}`)],
+    [horizon],
   );
   // y = 1 represents "not chosen" (sits below P2 at the bottom of the axis).
   // Index 0 is the read-only current P-level pulled from patient data.
   const currentY = typeof currentLevel === 'number' ? currentLevel : 1;
   const yValues = useMemo(
-    () => [currentY, ...pumpSequence.map(v => (typeof v === 'number' ? v : 1))],
-    [currentY, pumpSequence],
+    () => [
+      currentY,
+      ...pumpSequence
+        .slice(0, horizon)
+        .map(v => (typeof v === 'number' ? v : 1)),
+    ],
+    [currentY, pumpSequence, horizon],
   );
 
   const data = useMemo(
@@ -483,19 +617,19 @@ function PLevelConfigChart({
           tension: 0,
           spanGaps: false,
           clip: false,
-          pointRadius: 6,
-          pointHoverRadius: 7.5,
+          pointRadius: yValues.map((_, i) => (i > 0 && beat ? 7.5 : 6)),
+          pointHoverRadius: yValues.map((_, i) => (i > 0 && beat ? 8.25 : 7.5)),
           pointHitRadius: 28,
           pointBackgroundColor: yValues.map((v, i) => {
             if (i === 0) return scheme.accent;
             return v <= 1 ? (isDark ? card : '#ffffff') : scheme.primary;
           }),
           pointBorderColor: yValues.map((_, i) => (i === 0 ? scheme.accent : scheme.primary)),
-          pointBorderWidth: 1.875,
+          pointBorderWidth: yValues.map((_, i) => (i > 0 && beat ? 2.625 : 1.875)),
         },
       ],
     }),
-    [labels, yValues, scheme.primary, scheme.accent, card, isDark],
+    [labels, yValues, scheme.primary, scheme.accent, card, isDark, beat],
   );
 
   const options = useMemo(
@@ -506,6 +640,26 @@ function PLevelConfigChart({
       layout: { padding: { top: 8, bottom: 0, right: 72 } },
       plugins: {
         legend: { display: false },
+        annotation: {
+          common: { drawTime: 'beforeDatasetsDraw' },
+          annotations: {
+            configRegion: {
+              type: 'box',
+              xMin: 1,
+              xMax: horizon,
+              backgroundColor: '#FACC1518',
+              borderWidth: 0,
+            },
+            configBoundary: {
+              type: 'line',
+              xMin: 1,
+              xMax: 1,
+              borderColor: subtext,
+              borderWidth: 1.25,
+              borderDash: [4, 4],
+            },
+          },
+        },
         tooltip: {
           backgroundColor: card,
           titleColor: subtext,
@@ -535,6 +689,12 @@ function PLevelConfigChart({
         y: {
           min: 1,
           max: 9,
+          title: {
+            display: true,
+            text: 'P-level',
+            color: subtext,
+            font: { size: 11, weight: '600' },
+          },
           ticks: {
             color: subtext,
             font: { size: 10 },
@@ -547,7 +707,7 @@ function PLevelConfigChart({
         },
       },
     }),
-    [yValues, card, border, subtext, gridColor],
+    [yValues, card, border, subtext, gridColor, horizon],
   );
 
   useEffect(() => {
@@ -728,7 +888,16 @@ export default function Simulator() {
 
   // Per-patient state lives in the context so it persists across navigation.
   const persisted = getStateFor(selectedPatientId);
-  const pumpSequence = persisted?.pumpSequence ?? emptyPumpSequence();
+  // Default the 6 configurable hours to the patient's current P-level. The
+  // chart shows a flat line at the current level until the user edits a dot.
+  const defaultPumpSeq = useMemo(
+    () => (typeof currentLevel === 'number' && currentLevel >= 2 && currentLevel <= 9
+      ? Array(6).fill(currentLevel)
+      : emptyPumpSequence()),
+    [currentLevel],
+  );
+  const pumpSequence = persisted?.pumpSequence ?? defaultPumpSeq;
+  const horizonHours = persisted?.horizonHours ?? 6;
   const isRunning = persisted?.isRunning ?? false;
   const hasResult = persisted?.hasResult ?? false;
   const forecastRows = persisted?.forecastRows ?? [];
@@ -736,9 +905,23 @@ export default function Simulator() {
   const lastRunPumpSequence = persisted?.lastRunPumpSequence ?? null;
 
   const setPumpSequence = useCallback(
-    updater => setStateFor(selectedPatientId, prev => ({
+    updater => setStateFor(selectedPatientId, prev => {
+      // First edit after a reset sees the empty context default; treat that
+      // as the current-level baseline so the untouched hours stay at P{current}.
+      const baseline = !prev.pumpSequence || prev.pumpSequence.every(v => v == null)
+        ? defaultPumpSeq
+        : prev.pumpSequence;
+      return {
+        ...prev,
+        pumpSequence: typeof updater === 'function' ? updater(baseline) : updater,
+      };
+    }),
+    [selectedPatientId, setStateFor, defaultPumpSeq],
+  );
+  const setHorizonHours = useCallback(
+    v => setStateFor(selectedPatientId, prev => ({
       ...prev,
-      pumpSequence: typeof updater === 'function' ? updater(prev.pumpSequence) : updater,
+      horizonHours: Math.max(1, Math.min(6, Math.round(v))),
     })),
     [selectedPatientId, setStateFor],
   );
@@ -767,8 +950,8 @@ export default function Simulator() {
   );
 
   const canRunForecast = useMemo(
-    () => pumpSequence.every(v => typeof v === 'number' && v >= 2 && v <= 9),
-    [pumpSequence],
+    () => pumpSequence.slice(0, horizonHours).every(v => typeof v === 'number' && v >= 2 && v <= 9),
+    [pumpSequence, horizonHours],
   );
 
   // Reset persisted run for this patient if the device level changes.
@@ -877,62 +1060,55 @@ export default function Simulator() {
   const activeFeatureKeys = FEATURE_GROUPS[selectedGroup].keys;
   const lastHistLabel = patient?.timeline[patient.timeline.length - 1]?.label;
 
-  // Drag-to-collapse for the pinned pump-level chart at the top.
-  const PUMP_CHART_MIN_HEIGHT = 0;
-  const PUMP_CHART_COLLAPSE_THRESHOLD = 40;
-  const [viewportHeight, setViewportHeight] = useState(
-    () => (typeof window !== 'undefined' ? window.innerHeight : 800),
-  );
+  // Fetch policy recommendation at Hour 0 so we can show recommended pump
+  // change and stability index on the simulator header.
+  const [policyApi, setPolicyApi] = useState(null);
   useEffect(() => {
-    const onResize = () => setViewportHeight(window.innerHeight);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
-  const PUMP_CHART_MAX_HEIGHT = Math.round(viewportHeight * 0.25);
-  const PUMP_CHART_DEFAULT_HEIGHT = Math.min(260, PUMP_CHART_MAX_HEIGHT);
-  const [pumpChartHeight, setPumpChartHeight] = useState(PUMP_CHART_DEFAULT_HEIGHT);
-  useEffect(() => {
-    setPumpChartHeight(h => (h > PUMP_CHART_MAX_HEIGHT ? PUMP_CHART_MAX_HEIGHT : h));
-  }, [PUMP_CHART_MAX_HEIGHT]);
-  const dragStateRef = useRef(/** @type {{ startY: number; startHeight: number; pointerId: number; target: HTMLElement } | null} */ (null));
+    if (!selectedPatientId) {
+      setPolicyApi(null);
+      return;
+    }
+    let cancelled = false;
+    setPolicyApi(null);
+    const params = new URLSearchParams({ patient_id: selectedPatientId, hour: '0' });
+    fetch(`/api/policy_evaluation?${params.toString()}`)
+      .then(async res => {
+        if (!res.ok) throw new Error('policy unavailable');
+        return res.json();
+      })
+      .then(data => { if (!cancelled) setPolicyApi(data); })
+      .catch(() => { if (!cancelled) setPolicyApi(null); })
+    return () => { cancelled = true; };
+  }, [selectedPatientId]);
 
-  const onDragPointerDown = useCallback(e => {
-    e.preventDefault();
-    const target = e.currentTarget;
-    try { target.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    dragStateRef.current = {
-      startY: e.clientY,
-      startHeight: pumpChartHeight,
-      pointerId: e.pointerId,
-      target,
-    };
-  }, [pumpChartHeight]);
+  const policyDist = policyApi?.distribution?.length === 8 ? policyApi.distribution : null;
+  const recommendedLevel = policyDist
+    ? policyDist.indexOf(Math.max(...policyDist)) + 2
+    : null;
+  const stabilityIndex = policyApi?.rollout?.finalScore != null
+    ? Number(policyApi.rollout.finalScore).toFixed(1)
+    : null;
 
-  const onDragPointerMove = useCallback(e => {
-    const s = dragStateRef.current;
-    if (!s) return;
-    e.preventDefault();
-    const dy = e.clientY - s.startY;
-    let next = s.startHeight + dy;
-    if (next < PUMP_CHART_COLLAPSE_THRESHOLD) next = PUMP_CHART_MIN_HEIGHT;
-    next = Math.max(PUMP_CHART_MIN_HEIGHT, Math.min(PUMP_CHART_MAX_HEIGHT, next));
-    setPumpChartHeight(next);
-  }, []);
+  let changeLabel = '—';
+  let ChangeIcon = ArrowRight;
+  let changeColor = subtext;
+  if (recommendedLevel != null && typeof currentLevel === 'number') {
+    if (recommendedLevel > currentLevel) {
+      changeLabel = 'Increase';
+      ChangeIcon = ArrowUp;
+      changeColor = scheme.warning ?? scheme.accent;
+    } else if (recommendedLevel < currentLevel) {
+      changeLabel = 'Decrease';
+      ChangeIcon = ArrowDown;
+      changeColor = scheme.good;
+    } else {
+      changeLabel = 'None';
+      ChangeIcon = ArrowRight;
+      changeColor = scheme.primary;
+    }
+  }
 
-  const onDragPointerUp = useCallback(e => {
-    const s = dragStateRef.current;
-    if (!s) return;
-    try {
-      if (s.target.hasPointerCapture(e.pointerId)) s.target.releasePointerCapture(e.pointerId);
-    } catch { /* ignore */ }
-    dragStateRef.current = null;
-  }, []);
-
-  const togglePumpChartCollapsed = useCallback(() => {
-    setPumpChartHeight(h => (h <= PUMP_CHART_MIN_HEIGHT ? PUMP_CHART_DEFAULT_HEIGHT : PUMP_CHART_MIN_HEIGHT));
-  }, []);
-
-  const isPumpChartCollapsed = pumpChartHeight <= PUMP_CHART_MIN_HEIGHT;
+  const HEADER_BOX_HEIGHT = 280;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -949,48 +1125,105 @@ export default function Simulator() {
         </div>
       </div>
 
-      {/* Pinned P-level configuration graph + Run forecast button */}
+      {/* Recommendation box (left) + Pump level simulator (right) */}
       <div
         style={{ borderColor: border, background: card }}
         className="flex-shrink-0 border-b">
         <div className="px-5 pt-4 pb-[7px]">
-          <div className="flex items-start justify-between mb-1">
-            <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold">
-              Pump Level Sequence
+          <div className="flex gap-3 items-stretch" style={{ height: HEADER_BOX_HEIGHT }}>
+            {/* Left: recommendation summary (2/3 width) */}
+            <div
+              style={{ background: card, borderColor: border }}
+              className="w-2/3 rounded-2xl border-2 overflow-hidden flex flex-col">
+              {/* Top 2/3: recommended pump change */}
+              <div className="flex-[2] p-5 flex flex-col">
+                <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold">
+                  Recommended Pump Change
+                </div>
+                <div className="flex-1 flex items-center gap-5 mt-2">
+                  <div
+                    className="w-16 h-16 rounded-2xl flex items-center justify-center flex-shrink-0"
+                    style={{ background: changeColor + '18' }}>
+                    <ChangeIcon size={40} style={{ color: changeColor }} strokeWidth={2.5} />
+                  </div>
+                  <span style={{ color: changeColor }} className="text-4xl font-bold tracking-tight">
+                    {changeLabel}
+                  </span>
+                </div>
+              </div>
+              {/* Bottom 1/3: three stat cells */}
+              <div
+                className="flex-1 grid grid-cols-3 border-t"
+                style={{ borderColor: border }}>
+                {[
+                  {
+                    label: 'Current Pump Level',
+                    value: typeof currentLevel === 'number' ? `P${currentLevel}` : '—',
+                    color: scheme.accent,
+                  },
+                  {
+                    label: 'Recommended Pump Level',
+                    value: recommendedLevel != null ? `P${recommendedLevel}` : '—',
+                    color: scheme.good,
+                  },
+                  {
+                    label: 'Stability Index',
+                    value: stabilityIndex ?? '—',
+                    color: scheme.primary,
+                  },
+                ].map((stat, i) => (
+                  <div
+                    key={stat.label}
+                    className={'px-3 py-2 flex flex-col items-center justify-center text-center' + (i < 2 ? ' border-r' : '')}
+                    style={{ borderColor: border }}>
+                    <div style={{ color: subtext }} className="text-[11px] font-medium mb-1">
+                      {stat.label}
+                    </div>
+                    <div style={{ color: stat.color }} className="text-2xl font-bold font-mono">
+                      {stat.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="flex items-center gap-3 ml-3 flex-shrink-0">
-              {!canRunForecast && !isPumpChartCollapsed && (
-                <span style={{ color: subtext }} className="text-[10px] opacity-75">
-                  Set all six hours to enable Run forecast.
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={togglePumpChartCollapsed}
-                style={{ color: subtext, borderColor: border }}
-                className="text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded border hover:opacity-80 transition-opacity">
-                {isPumpChartCollapsed ? 'Expand' : 'Collapse'}
-              </button>
+
+            {/* Right: pump level simulator chart (1/3 width) */}
+            <div
+              style={{ background: card, borderColor: border }}
+              className="w-1/3 rounded-2xl border-2 overflow-hidden flex flex-col p-3">
+              <div style={{ color: subtext }} className="text-xs font-semibold text-center mb-2">
+                Click the dots to evaluate simulated P-level!
+              </div>
+              <div className="flex-1 min-h-0 relative">
+                <PLevelConfigChart
+                  pumpSequence={pumpSequence}
+                  setPumpSequence={setPumpSequence}
+                  currentLevel={currentLevel}
+                  horizonHours={horizonHours}
+                  isDark={isDark}
+                  card={card}
+                  border={border}
+                  subtext={subtext}
+                  scheme={scheme}
+                  gridColor={gridColor}
+                />
+              </div>
+              <div className="flex-shrink-0 pt-2 mt-1 border-t" style={{ borderColor: border }}>
+                <HorizonSlider
+                  value={horizonHours}
+                  onChange={setHorizonHours}
+                  scheme={scheme}
+                  subtext={subtext}
+                  border={border}
+                  card={card}
+                  muted={muted}
+                  isDark={isDark}
+                />
+              </div>
             </div>
           </div>
 
-          {!isPumpChartCollapsed && (
-            <div className="relative w-full" style={{ height: pumpChartHeight }}>
-              <PLevelConfigChart
-                pumpSequence={pumpSequence}
-                setPumpSequence={setPumpSequence}
-                currentLevel={currentLevel}
-                isDark={isDark}
-                card={card}
-                border={border}
-                subtext={subtext}
-                scheme={scheme}
-                gridColor={gridColor}
-              />
-            </div>
-          )}
-
-          <div className="flex items-center gap-3 mt-[7px]">
+          <div className="flex items-center gap-3 mt-3">
             <button
               type="button"
               onClick={runSimulation}
@@ -1009,6 +1242,11 @@ export default function Simulator() {
               </motion.div>
               {isRunning ? 'Simulating…' : 'Run forecast'}
             </button>
+            {!canRunForecast && (
+              <span style={{ color: subtext }} className="text-[10px] opacity-75">
+                Set all six hours to enable Run forecast.
+              </span>
+            )}
             {forecastError && (
               <p style={{ color: CHART_STATUS.warning }} className="text-xs leading-snug">
                 {forecastError}
@@ -1018,28 +1256,11 @@ export default function Simulator() {
               type="button"
               onClick={() => clearStateFor(selectedPatientId)}
               style={{ color: subtext, borderColor: border, background: muted }}
-              className="ml-auto self-end px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 hover:opacity-80 transition-opacity">
+              className="ml-auto px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 hover:opacity-80 transition-opacity">
               <RotateCcw size={12} />
               Reset Simulator
             </button>
           </div>
-        </div>
-
-        {/* Drag handle at the bottom of the pump level section. */}
-        <div
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Drag to resize pump level sequence"
-          onPointerDown={onDragPointerDown}
-          onPointerMove={onDragPointerMove}
-          onPointerUp={onDragPointerUp}
-          onPointerCancel={onDragPointerUp}
-          onDoubleClick={togglePumpChartCollapsed}
-          style={{ touchAction: 'none', cursor: 'ns-resize' }}
-          className="group relative h-2 w-full flex items-center justify-center select-none">
-          <div
-            style={{ background: border }}
-            className="h-1 w-12 rounded-full opacity-60 group-hover:opacity-100 transition-opacity" />
         </div>
       </div>
 
