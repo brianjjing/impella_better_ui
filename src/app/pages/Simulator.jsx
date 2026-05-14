@@ -19,14 +19,21 @@ const FEATURE_GROUPS = [
 /** Vivid amber for forecast series (high contrast on dark/light charts) */
 const FORECAST_COLOR = '#FACC15';
 
-/** Map a chart label like "T+3h" / "T0h" / "T-1h" to a policy_eval hour (0..5), or null. */
+/** Map a chart label like "Hour 3" / "T0h" / "T-1h" to a policy_eval hour (0..6), or null. */
 function policyHourFromLabel(label) {
   if (!label || typeof label !== 'string') return null;
-  if (label === 'T0h') return 0;
-  const m = label.match(/^T\+(\d+)h$/);
+  if (label === 'T0h' || label === 'Hour 0') return 0;
+  const m = label.match(/^Hour (\d+)$/);
   if (!m) return null;
   const n = parseInt(m[1], 10);
-  return n >= 0 && n <= 5 ? n : null;
+  return n >= 1 && n <= 6 ? n : null;
+}
+
+// Labels that mark an "hour boundary" on the forecast chart (gets a larger dot,
+// crisp border, and a rendered x-axis tick). Covers historical 'T-1h'/'T0h' and
+// forecast 'Hour 1'..'Hour 6'.
+function isHourLabel(label) {
+  return typeof label === 'string' && (label.startsWith('T') || label.startsWith('Hour '));
 }
 
 function SimulatorFeatureChart({
@@ -106,29 +113,29 @@ function SimulatorFeatureChart({
           gradientLineWidth: isSeverityColored ? 3 : 0,
           tension: 0,
           spanGaps: true,
-          pointRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2.75,
-          pointHoverRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 6 : 2.75,
-          pointHitRadius: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 14 : 8,
+          pointRadius: ctx => isHourLabel(labels[ctx.dataIndex]) ? 6 : 2.75,
+          pointHoverRadius: ctx => isHourLabel(labels[ctx.dataIndex]) ? 6 : 2.75,
+          pointHitRadius: ctx => isHourLabel(labels[ctx.dataIndex]) ? 14 : 8,
           pointBackgroundColor: ctx => {
             const v = ctx.raw;
             if (v == null || typeof v !== 'number') return 'transparent';
             return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
           },
           pointBorderColor: ctx => {
-            if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
+            if (!isHourLabel(labels[ctx.dataIndex])) return 'transparent';
             return plainLineColor;
           },
-          pointBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
+          pointBorderWidth: ctx => isHourLabel(labels[ctx.dataIndex]) ? 2.25 : 0,
           pointHoverBackgroundColor: ctx => {
             const v = ctx.raw;
             if (v == null || typeof v !== 'number') return 'transparent';
             return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
           },
           pointHoverBorderColor: ctx => {
-            if (!labels[ctx.dataIndex]?.startsWith('T')) return 'transparent';
+            if (!isHourLabel(labels[ctx.dataIndex])) return 'transparent';
             return plainLineColor;
           },
-          pointHoverBorderWidth: ctx => labels[ctx.dataIndex]?.startsWith('T') ? 2.25 : 0,
+          pointHoverBorderWidth: ctx => isHourLabel(labels[ctx.dataIndex]) ? 2.25 : 0,
         }
       : null;
 
@@ -207,7 +214,7 @@ function SimulatorFeatureChart({
             autoSkip: false,
             callback: (_value, index) => {
               const lbl = labels[index];
-              if (lbl?.startsWith('T')) return lbl;
+              if (isHourLabel(lbl)) return lbl;
               if (lbl === '+30m') return '+30 min';
               return undefined;
             },
@@ -350,8 +357,8 @@ function SimulatorFeatureChart({
             disabled={overlay.policyHour == null}
             title={
               overlay.policyHour == null
-                ? 'Policy evaluation is only available for T+0h through T+5h'
-                : `Open Policy Evaluation at T+${overlay.policyHour}h`
+                ? 'Policy evaluation is only available for Hour 0 through Hour 6'
+                : `Open Policy Evaluation at Hour ${overlay.policyHour}`
             }
             style={{
               background: overlay.policyHour == null ? border : scheme.primary,
@@ -432,14 +439,16 @@ function PLevelDropdown({ value, onChange, card, border, subtext, scheme }) {
 
 /**
  * Pinned P-level sequence configuration chart.
- * X-axis: T+1h … T+6h (6 discrete dots).
+ * X-axis: Hour 0 (current, non-configurable, from patient.deviceLevel)
+ *         followed by Hour 1 … Hour 6 (6 draggable dots).
  * Y-axis: 1 (unset) at the bottom, then P2 … P9.
- * Dots are draggable vertically; each snaps to an integer P-level
- * (or below P2 → unset). The line connects all six dots.
+ * The configurable dots are draggable vertically; each snaps to an integer
+ * P-level (or below P2 → unset). The line connects all seven dots.
  */
 function PLevelConfigChart({
   pumpSequence,
   setPumpSequence,
+  currentLevel,
   isDark,
   card,
   border,
@@ -451,11 +460,16 @@ function PLevelConfigChart({
   const dragRef = useRef(/** @type {{ idx: number; pointerId: number } | null} */ (null));
   const [tickXs, setTickXs] = useState(/** @type {number[]} */ ([]));
 
-  const labels = useMemo(() => ['T+0h', 'T+1h', 'T+2h', 'T+3h', 'T+4h', 'T+5h'], []);
+  const labels = useMemo(
+    () => ['Hour 0', 'Hour 1', 'Hour 2', 'Hour 3', 'Hour 4', 'Hour 5', 'Hour 6'],
+    [],
+  );
   // y = 1 represents "not chosen" (sits below P2 at the bottom of the axis).
+  // Index 0 is the read-only current P-level pulled from patient data.
+  const currentY = typeof currentLevel === 'number' ? currentLevel : 1;
   const yValues = useMemo(
-    () => pumpSequence.map(v => (typeof v === 'number' ? v : 1)),
-    [pumpSequence],
+    () => [currentY, ...pumpSequence.map(v => (typeof v === 'number' ? v : 1))],
+    [currentY, pumpSequence],
   );
 
   const data = useMemo(
@@ -472,15 +486,16 @@ function PLevelConfigChart({
           pointRadius: 6,
           pointHoverRadius: 7.5,
           pointHitRadius: 28,
-          pointBackgroundColor: yValues.map(v =>
-            v <= 1 ? (isDark ? card : '#ffffff') : scheme.primary,
-          ),
-          pointBorderColor: scheme.primary,
+          pointBackgroundColor: yValues.map((v, i) => {
+            if (i === 0) return scheme.accent;
+            return v <= 1 ? (isDark ? card : '#ffffff') : scheme.primary;
+          }),
+          pointBorderColor: yValues.map((_, i) => (i === 0 ? scheme.accent : scheme.primary)),
           pointBorderWidth: 1.875,
         },
       ],
     }),
-    [labels, yValues, scheme.primary, card, isDark],
+    [labels, yValues, scheme.primary, scheme.accent, card, isDark],
   );
 
   const options = useMemo(
@@ -501,7 +516,11 @@ function PLevelConfigChart({
           callbacks: {
             title: items => items[0]?.label ?? '',
             label: ctx => {
-              const v = yValues[ctx.dataIndex];
+              const i = ctx.dataIndex;
+              const v = yValues[i];
+              if (i === 0) {
+                return v <= 1 ? 'Current — not set' : `Current — P${v} (read-only)`;
+              }
               return v <= 1 ? 'Not set — drag up' : `P${v}`;
             },
           },
@@ -556,17 +575,20 @@ function PLevelConfigChart({
       return els.length ? els[0].index : -1;
     };
 
-    const applyValue = (idx, v) => {
+    // chartIdx is into the 7-point chart array; pumpSequence is 6 entries
+    // mapped to chartIdx 1..6. chartIdx 0 (current state) is read-only.
+    const applyValue = (chartIdx, v) => {
+      if (chartIdx <= 0) return;
       setPumpSequence(prev => {
         const n = [...prev];
-        n[idx] = v <= 1 ? null : v;
+        n[chartIdx - 1] = v <= 1 ? null : v;
         return n;
       });
     };
 
     const onPointerDown = e => {
       const idx = indexFromEvent(e);
-      if (idx < 0) return;
+      if (idx <= 0) return;
       e.preventDefault();
       try {
         canvas.setPointerCapture(e.pointerId);
@@ -636,11 +658,15 @@ function PLevelConfigChart({
     return () => ro.disconnect();
   }, [labels]);
 
+  // chartIdx is into the 7-point chart array; pumpSequence is 6 entries
+  // mapped to chartIdx 1..6. chartIdx 0 (current state) is read-only and has
+  // no dropdown.
   const handleDropdownChange = useCallback(
-    (idx, newValue) => {
+    (chartIdx, newValue) => {
+      if (chartIdx <= 0) return;
       setPumpSequence(prev => {
         const n = [...prev];
-        n[idx] = newValue;
+        n[chartIdx - 1] = newValue;
         return n;
       });
     },
@@ -662,22 +688,25 @@ function PLevelConfigChart({
             </span>
           </div>
         ))}
-        {tickXs.map((x, i) => (
-          <div key={`drop-${i}`}
-            className="absolute top-0 bottom-0 flex items-center"
-            style={{ left: x + 16, width: 44 }}>
-            <div className="w-full">
-              <PLevelDropdown
-                value={pumpSequence[i]}
-                onChange={v => handleDropdownChange(i, v)}
-                card={card}
-                border={border}
-                subtext={subtext}
-                scheme={scheme}
-              />
+        {tickXs.map((x, i) => {
+          if (i === 0) return null;
+          return (
+            <div key={`drop-${i}`}
+              className="absolute top-0 bottom-0 flex items-center"
+              style={{ left: x + 16, width: 44 }}>
+              <div className="w-full">
+                <PLevelDropdown
+                  value={pumpSequence[i - 1]}
+                  onChange={v => handleDropdownChange(i, v)}
+                  card={card}
+                  border={border}
+                  subtext={subtext}
+                  scheme={scheme}
+                />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -912,7 +941,7 @@ export default function Simulator() {
         <Sliders size={16} style={{ color: scheme.primary }} />
         <div>
           <h1 style={{ color: text }} className="text-sm font-semibold">Pump Level Simulator</h1>
-          <p style={{ color: subtext }} className="text-xs">10-min resolution · T-1h → T0h actual · T0h → T+6h forecast</p>
+          <p style={{ color: subtext }} className="text-xs">10-min resolution · T-1h → T0h actual · T0h → Hour 6 forecast</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <span style={{ color: subtext }} className="text-xs">Patient:</span>
@@ -950,6 +979,7 @@ export default function Simulator() {
               <PLevelConfigChart
                 pumpSequence={pumpSequence}
                 setPumpSequence={setPumpSequence}
+                currentLevel={currentLevel}
                 isDark={isDark}
                 card={card}
                 border={border}

@@ -190,11 +190,11 @@ def post_forecast(body: ForecastRequest) -> ForecastResponse:
             unnorm = wm.unnorm_output(state.squeeze(0))  # (6, 12)
             hour_arr = unnorm.cpu().numpy()
             # Each forecast hour: 5 sub-steps (+10m … +50m) followed by the next
-            # hour boundary (T+1h … T+6h). Conceptually 10 min between dots, with
-            # the last forecast dot landing exactly on T+6h.
+            # hour boundary (Hour 1 … Hour 6). Conceptually 10 min between dots,
+            # with the last forecast dot landing exactly on Hour 6.
             for step in range(6):
                 if step == 5:
-                    label = f"T+{hour + 1}h"
+                    label = f"Hour {hour + 1}"
                 else:
                     label = f"+{(step + 1) * 10}m"
                 entry = {

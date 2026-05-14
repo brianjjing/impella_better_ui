@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { NavLink, Outlet, useOutletContext, useLocation } from 'react-router';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  Home, Activity, Sliders, Brain, Settings, ChevronLeft, ChevronRight,
+  Home, Sliders, Brain, Settings, ChevronLeft, ChevronRight,
   Search, Sun, Moon, X, TrendingUp, AlertCircle, CheckCircle, Clock
 } from 'lucide-react';
 import { useTheme, getSurfaces, getStatusColor } from '../context/ThemeContext';
@@ -17,9 +17,8 @@ export function useLayoutContext() {
 
 const navItems = [
   { to: '/',          label: 'Overview',    icon: Home },
-  { to: '/timeline',  label: 'Timeline',    icon: Activity },
-  { to: '/simulator', label: 'Simulator',   icon: Sliders },
   { to: '/policy',    label: 'Policy Eval', icon: Brain },
+  { to: '/simulator', label: 'Simulator',   icon: Sliders },
 ];
 
 const severityOrder = { critical: 0, warning: 1, stable: 2, improving: 3, weaned: 4 };

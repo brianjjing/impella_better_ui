@@ -124,7 +124,7 @@ function generateRollout(patientId, pumpLevel, quality, id, patientsList = patie
     };
 
     const reward = (quality === 'optimal' ? 0.8 : quality === 'suboptimal' ? 0.4 : -0.2) + (Math.random() - 0.5) * 0.1;
-    steps.push({ state: { ...cur, label: `T+${i + 1}h` }, action, actionLabel: `P${action}`, reward });
+    steps.push({ state: { ...cur, label: `Hour ${i + 1}` }, action, actionLabel: `P${action}`, reward });
     cur = next;
   }
 
@@ -159,7 +159,7 @@ export function generateRollouts(patientId, patientsList = patients) {
 
 /**
  * @param {object} patient
- * @param {number[]} levelsSix — P-level (2–9) for each hour T+1 … T+6
+ * @param {number[]} levelsSix — P-level (2–9) for each forecast hour 1 … 6
  */
 export function generateForecast(patient, levelsSix) {
   if (!Array.isArray(levelsSix) || levelsSix.length !== 6) return [];
@@ -178,7 +178,7 @@ export function generateForecast(patient, levelsSix) {
     forecast.push({
       t: 6 + i,
       timestamp: new Date(new Date(last.timestamp).getTime() + h * 3600000).toISOString(),
-      label: `T+${h}h`,
+      label: `Hour ${h}`,
       MAP:          Math.round((last.MAP          * (delta > 0 ? 1.0 - progress * 0.04 : 1.0 + progress * 0.03)) * 10) / 10,
       pumpSpeed:    Math.round( last.pumpSpeed    * (1 + delta * 0.008 * progress)),
       motorCurrent: Math.round((last.motorCurrent * (1 + delta * 0.012 * progress)) * 10) / 10,

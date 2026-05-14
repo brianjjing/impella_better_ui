@@ -161,7 +161,7 @@ def _rollout_sac(
         rollout_actions.append(p_level)
         row = wm.unnorm_output(env.current_state.unsqueeze(0)).squeeze(0)[-1].detach().cpu().numpy()
         state_dict = {FEATURE_KEYS[j]: _safe_float(row[j]) for j in range(len(FEATURE_KEYS))}
-        state_dict["label"] = f"T+{i + 1}h"
+        state_dict["label"] = f"Hour {i + 1}"
         steps.append(
             {
                 "state": state_dict,
@@ -223,7 +223,7 @@ def _mock_rollout_optimal(wm, state_tensor: torch.Tensor, pump_level: int = 6) -
         }
         rw = 0.8 + (np.random.random() - 0.5) * 0.1
         total_reward += rw
-        step_state = {**nxt, "label": f"T+{i + 1}h"}
+        step_state = {**nxt, "label": f"Hour {i + 1}"}
         steps.append({"state": step_state, "actionLabel": f"P{action}", "reward": rw})
         cur = nxt
 
@@ -260,8 +260,8 @@ def get_policy_evaluation(
     hour: int = Query(
         0,
         ge=0,
-        le=5,
-        description="Which T+hour to evaluate from. 0 uses the initial T-1h→T0h state; 1..5 roll the world model forward using `p_levels`.",
+        le=6,
+        description="Which forecast hour to evaluate from. 0 uses the initial T-1h→T0h state; 1..6 roll the world model forward using `p_levels`.",
     ),
     p_levels: Optional[str] = Query(
         None,

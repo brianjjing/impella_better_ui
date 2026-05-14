@@ -489,7 +489,6 @@ export default function MainMenu() {
             {/* Navigation cards */}
             <div className="col-span-2 flex flex-col gap-3">
               {[
-                { to: '/timeline',  icon: Activity, label: 'Patient Timeline',  desc: 'Visualize 12 features over time with zoom & annotations', color: scheme.primary },
                 { to: '/simulator', icon: Sliders,  label: 'Pump Simulator',    desc: 'Forecast hemodynamics for P2–P9 over 6 hours',           color: scheme.accent },
                 { to: '/policy',    icon: Brain,    label: 'Policy Evaluation', desc: 'AI-guided weaning recommendations and patient trajectories', color: scheme.good },
               ].map(({ to, icon: Icon, label, desc, color }, i) => (
