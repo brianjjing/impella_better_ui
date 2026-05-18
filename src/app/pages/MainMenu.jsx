@@ -3,11 +3,11 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  Activity, Sliders, Brain, Heart, ChevronRight, TrendingUp,
+  Activity, Brain, Heart, ChevronRight, TrendingUp,
   AlertCircle, CheckCircle, Clock, Zap, Shield, BarChart2, Search, X
 } from 'lucide-react';
 import { useTheme, getSurfaces, getStatusColor } from '../context/ThemeContext';
-import { featureKeys, featureConfigs } from '../data/mockData';
+import { featureDisplayOrder, featureConfigs } from '../data/mockData';
 import { useLayoutContext } from '../components/Layout';
 import { HeartLevel3 } from '../components/heart/HeartLevel3';
 import { HeartLevel2 } from '../components/heart/HeartLevel2';
@@ -406,7 +406,7 @@ export default function MainMenu() {
               </div>
 
               <div className="grid grid-cols-4 gap-2">
-                {featureKeys.map(key => {
+                {featureDisplayOrder.map(key => {
                   const cfg = featureConfigs[key];
                   const val = features?.[key];
                   const hasStabilityRule = STABILITY_METRIC_KEYS.has(key);
@@ -486,18 +486,18 @@ export default function MainMenu() {
               )}
             </motion.div>
 
-            {/* Navigation cards */}
+            {/* Navigation cards — original layout; height follows content (no flex-1 stretch). */}
             <div className="col-span-2 flex flex-col gap-3">
               {[
-                { to: '/simulator', icon: Sliders,  label: 'Pump Simulator',    desc: 'Forecast hemodynamics for P2–P9 over 6 hours',           color: scheme.accent },
-                { to: '/policy',    icon: Brain,    label: 'Policy Evaluation', desc: 'AI-guided weaning recommendations and patient trajectories', color: scheme.good },
+                { to: '/simulator', icon: BarChart2, label: 'Pump Simulator',    desc: 'Forecast hemodynamics for P2–P9 over 6 hours',           color: scheme.accent },
+                { to: '/policy',    icon: Brain,     label: 'Policy Evaluation', desc: 'Simulation evaluation and pump-level recommendations', color: scheme.good },
               ].map(({ to, icon: Icon, label, desc, color }, i) => (
                 <motion.button key={to}
                   onClick={() => navigate(to)}
                   initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.18 + i * 0.08 }}
                   whileHover={{ y: -2, boxShadow: `0 8px 24px ${color}33` }}
                   style={{ background: color + '18', borderColor: color + '44' }}
-                  className="flex-1 rounded-xl border p-4 text-left transition-all cursor-pointer">
+                  className="w-full h-auto shrink-0 rounded-xl border p-4 text-left transition-all cursor-pointer">
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center mb-3" style={{ background: color + '33' }}>
                     <Icon size={16} style={{ color }} />
                   </div>

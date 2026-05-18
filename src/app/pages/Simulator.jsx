@@ -1,17 +1,18 @@
-import { useMemo, useEffect, useRef, useCallback, useState } from 'react';
+import { useMemo, useEffect, useRef, useCallback, useState, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Line } from 'react-chartjs-2';
 import { useNavigate } from 'react-router';
-import { Sliders, Play, TrendingUp, TrendingDown, Minus, RotateCcw, Activity, X, ArrowUp, ArrowDown, ArrowRight, Info } from 'lucide-react';
+import { Sliders, Play, TrendingUp, TrendingDown, Minus, RotateCcw, X, ArrowUp, ArrowDown, ArrowRight, Info } from 'lucide-react';
 import { useTheme, getSurfaces } from '../context/ThemeContext';
 import { useSimulatorContext, emptyPumpSequence } from '../context/SimulatorContext';
-import { featureConfigs, featureKeys } from '../data/mockData';
+import { featureConfigs, featureKeys, featureDisplayOrder } from '../data/mockData';
 import { CHART_STATUS } from '../constants/chartStatusColors';
 import { continuousSeverityColor } from '../lib/continuousSeverityColor';
 import { useLayoutContext } from '../components/Layout';
 
 const FEATURE_GROUPS = [
-  { label: 'All', keys: ['MAP', 'HR', 'pulsatility', 'SBP', 'DBP', 'LVP', 'LVEDP', 'eseLV', 'pumpSpeed', 'motorCurrent', 'pumpFlow', 'tauLV'] },
+  { label: 'All', keys: [...featureDisplayOrder] },
 ];
 
 /** Vivid amber for forecast series (high contrast on dark/light charts) */
@@ -22,9 +23,12 @@ function policyHourFromLabel(label) {
   if (!label || typeof label !== 'string') return null;
   if (label === 'T0h' || label === 'Hour 0') return 0;
   const m = label.match(/^Hour (\d+)$/);
-  if (!m) return null;
-  const n = parseInt(m[1], 10);
-  return n >= 1 && n <= 6 ? n : null;
+  if (m) {
+    const n = parseInt(m[1], 10);
+    if (n === 0) return 0;
+    return n >= 1 && n <= 6 ? n : null;
+  }
+  return null;
 }
 
 // Labels that mark an "hour boundary" on the forecast chart (gets a larger dot,
@@ -277,9 +281,37 @@ function SimulatorFeatureChart({
     }
   }, [combinedData.length, pinnedIdx]);
 
-  let overlay = null;
-  if (pinnedIdx != null && chartRef.current) {
+  const pinDetail = useMemo(() => {
+    if (pinnedIdx == null || pinnedIdx >= combinedData.length) return null;
+    const lbl = labels[pinnedIdx];
+    const row = combinedData[pinnedIdx];
+    const isFore = Boolean(row?.isForecast);
+    const valKey = isFore ? `fore_${feature}` : `hist_${feature}`;
+    const v = row?.[valKey];
+    const valueStr = typeof v === 'number' ? v.toFixed(2) : '—';
+    const ph = policyHourFromLabel(lbl);
+    const evalEnabled = hasResult && ph != null;
+    return {
+      label: lbl,
+      isForecast: isFore,
+      valueStr,
+      policyHour: ph,
+      evalEnabled,
+    };
+  }, [pinnedIdx, combinedData, labels, feature, hasResult]);
+
+  const [anchorVP, setAnchorVP] = useState(/** @type {{ left: number; top: number; flipBelow: boolean } | null} */ (null));
+
+  const updatePinAnchor = useCallback(() => {
+    if (pinnedIdx == null) {
+      setAnchorVP(null);
+      return;
+    }
     const c = chartRef.current;
+    if (!c?.canvas) {
+      setAnchorVP(null);
+      return;
+    }
     let pt = null;
     for (let dsi = 0; dsi < c.data.datasets.length; dsi += 1) {
       const meta = c.getDatasetMeta(dsi);
@@ -289,41 +321,64 @@ function SimulatorFeatureChart({
         break;
       }
     }
-    if (pt) {
-      const lbl = labels[pinnedIdx];
-      const row = combinedData[pinnedIdx];
-      const isFore = Boolean(row?.isForecast);
-      const valKey = isFore ? `fore_${feature}` : `hist_${feature}`;
-      const v = row?.[valKey];
-      const valueStr = typeof v === 'number' ? v.toFixed(2) : '—';
-      const ph = policyHourFromLabel(lbl);
-      overlay = { x: pt.x, y: pt.y, label: lbl, isForecast: isFore, valueStr, policyHour: ph };
+    if (!pt) {
+      setAnchorVP(null);
+      return;
     }
-  }
+    const rect = c.canvas.getBoundingClientRect();
+    const left = rect.left + pt.x;
+    const top = rect.top + pt.y;
+    setAnchorVP({ left, top, flipBelow: top < 100 });
+  }, [pinnedIdx]);
 
-  return (
-    <div className="relative w-full h-full">
-      <Line ref={chartRef} data={{ labels, datasets }} options={optionsWithClick} />
-      {overlay && (
+  useLayoutEffect(() => {
+    if (pinDetail == null) {
+      setAnchorVP(null);
+      return undefined;
+    }
+    updatePinAnchor();
+    const raf = requestAnimationFrame(() => updatePinAnchor());
+    window.addEventListener('scroll', updatePinAnchor, true);
+    window.addEventListener('resize', updatePinAnchor);
+    const canvas = chartRef.current?.canvas;
+    const ro = canvas
+      ? new ResizeObserver(() => updatePinAnchor())
+      : null;
+    if (canvas && ro) ro.observe(canvas);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('scroll', updatePinAnchor, true);
+      window.removeEventListener('resize', updatePinAnchor);
+      ro?.disconnect();
+    };
+  }, [pinDetail, updatePinAnchor, combinedData.length, hasResult]);
+
+  const pinPopup = pinDetail && anchorVP && typeof document !== 'undefined'
+    ? createPortal(
         <div
           ref={overlayRef}
           onClick={e => e.stopPropagation()}
+          role="dialog"
+          aria-label="Point details"
           style={{
-            position: 'absolute',
-            left: overlay.x,
-            top: overlay.y,
-            transform: 'translate(-50%, calc(-100% - 12px))',
+            position: 'fixed',
+            left: anchorVP.left,
+            top: anchorVP.top,
+            transform: anchorVP.flipBelow
+              ? 'translate(-50%, 14px)'
+              : 'translate(-50%, calc(-100% - 12px))',
             background: card,
             borderColor: border,
             color: subtext,
-            zIndex: 30,
+            zIndex: 10000,
             minWidth: 180,
             pointerEvents: 'auto',
+            boxShadow: `0 12px 32px ${isDark ? '#00000077' : '#64748b44'}`,
           }}
-          className="rounded-lg border shadow-lg p-2.5 text-xs">
+          className="rounded-lg border p-2.5 text-xs">
           <div className="flex items-center justify-between gap-2 mb-1">
             <span style={{ color: subtext }} className="font-semibold">
-              {overlay.label} · {overlay.isForecast ? 'forecast' : 'historical'}
+              {pinDetail.label} · {pinDetail.isForecast ? 'forecast' : 'historical'}
             </span>
             <button
               type="button"
@@ -337,7 +392,7 @@ function SimulatorFeatureChart({
           <div className="flex items-baseline gap-1.5 mb-2">
             <span style={{ color: subtext }} className="text-[10px]">{cfgLabel ?? feature}:</span>
             <span style={{ color: scheme.primary }} className="font-mono font-semibold text-sm">
-              {overlay.valueStr}
+              {pinDetail.valueStr}
             </span>
             {cfgUnit && (
               <span style={{ color: subtext }} className="text-[10px]">{cfgUnit}</span>
@@ -346,27 +401,35 @@ function SimulatorFeatureChart({
           <button
             type="button"
             onClick={() => {
-              if (overlay.policyHour == null) return;
-              navigate(`/policy?hour=${overlay.policyHour}`);
+              if (!pinDetail.evalEnabled || pinDetail.policyHour == null) return;
+              navigate(`/policy?hour=${pinDetail.policyHour}`);
             }}
-            disabled={overlay.policyHour == null}
+            disabled={!pinDetail.evalEnabled}
             title={
-              overlay.policyHour == null
-                ? 'Policy evaluation is only available for Hour 0 through Hour 6'
-                : `Open Policy Evaluation at Hour ${overlay.policyHour}`
+              !hasResult
+                ? 'Run the forecast first to open Policy Evaluation for this hour'
+                : pinDetail.policyHour == null
+                  ? 'Policy evaluation is available from T0h and Hour 1–6'
+                  : `Open Policy Evaluation at hour ${pinDetail.policyHour}`
             }
             style={{
-              background: overlay.policyHour == null ? border : scheme.primary,
-              color: overlay.policyHour == null ? subtext : 'white',
-              opacity: overlay.policyHour == null ? 0.6 : 1,
-              cursor: overlay.policyHour == null ? 'not-allowed' : 'pointer',
+              background: !pinDetail.evalEnabled ? border : scheme.primary,
+              color: !pinDetail.evalEnabled ? subtext : 'white',
+              opacity: !pinDetail.evalEnabled ? 0.6 : 1,
+              cursor: !pinDetail.evalEnabled ? 'not-allowed' : 'pointer',
             }}
-            className="w-full px-2 py-1.5 rounded-md text-[11px] font-semibold flex items-center justify-center gap-1.5">
-            <Activity size={11} />
-            Evaluate Policy
+            className="w-full px-2 py-1.5 rounded-md text-[11px] font-semibold">
+            Eval
           </button>
-        </div>
-      )}
+        </div>,
+        document.body,
+      )
+    : null;
+
+  return (
+    <div className="relative w-full h-full">
+      <Line ref={chartRef} data={{ labels, datasets }} options={optionsWithClick} />
+      {pinPopup}
     </div>
   );
 }
@@ -941,7 +1004,7 @@ export default function Simulator() {
   const lastHistLabel = patient?.timeline[patient.timeline.length - 1]?.label;
 
   // Fetch policy recommendation at Hour 0 so we can show recommended pump
-  // change and stability index on the simulator header.
+  // change and pump level score on the simulator header.
   const [policyApi, setPolicyApi] = useState(null);
   useEffect(() => {
     if (!selectedPatientId) {
@@ -965,7 +1028,7 @@ export default function Simulator() {
   const recommendedLevel = policyDist
     ? policyDist.indexOf(Math.max(...policyDist)) + 2
     : null;
-  const stabilityIndex = policyApi?.rollout?.finalScore != null
+  const pumpLevelScore = policyApi?.rollout?.finalScore != null
     ? Number(policyApi.rollout.finalScore).toFixed(1)
     : null;
 
@@ -1008,13 +1071,13 @@ export default function Simulator() {
       {/* Recommendation box (left) + Pump level simulator (right) */}
       <div
         style={{ borderColor: border, background: card }}
-        className="flex-shrink-0 border-b">
-        <div className="px-5 pt-4 pb-[7px]">
-          <div className="flex gap-3 items-stretch" style={{ height: HEADER_BOX_HEIGHT }}>
+        className="flex-shrink-0 border-b overflow-visible">
+        <div className="px-5 pt-4 pb-[7px] overflow-visible">
+          <div className="flex gap-3 items-stretch overflow-visible" style={{ height: HEADER_BOX_HEIGHT }}>
             {/* Left: recommendation summary (2/3 width) */}
             <div
               style={{ background: card, borderColor: border }}
-              className="w-1/2 rounded-2xl border-2 overflow-hidden flex flex-col">
+              className="w-1/2 rounded-2xl border-2 overflow-visible flex flex-col">
               {/* Top 2/3: recommended pump change */}
               <div className="flex-[2] p-5 flex flex-col">
                 <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold">
@@ -1044,13 +1107,13 @@ export default function Simulator() {
                     label: 'Recommended Pump Level',
                     value: recommendedLevel != null ? `P${recommendedLevel}` : '—',
                     color: scheme.good,
-                    info: "The AI policy's highest-probability pump power level (P2–P9) for this patient at the current state.",
+                    info: "Pump level with highest chance of being deemed best, given patient's state.",
                   },
                   {
-                    label: 'Stability Index',
-                    value: stabilityIndex ?? '—',
+                    label: 'Pump Level Score',
+                    value: pumpLevelScore ?? '—',
                     color: scheme.primary,
-                    info: 'Stability index 0–10 (higher is better), derived from the policy rollout weaning metric.',
+                    info: "0–10 score on the simulated P-level's effectiveness, based on hemodynamic stability.",
                   },
                 ].map((stat, i) => (
                   <div
@@ -1060,7 +1123,7 @@ export default function Simulator() {
                     {stat.info && (
                       <div
                         ref={openInfo === stat.label ? infoWrapRef : null}
-                        className="absolute top-1 right-1">
+                        className="absolute top-1 right-1 z-[200]">
                         <button
                           type="button"
                           aria-label={`About ${stat.label}`}
@@ -1072,10 +1135,7 @@ export default function Simulator() {
                         {openInfo === stat.label && (
                           <div
                             style={{ background: card, borderColor: border, color: text }}
-                            className="absolute z-50 right-0 mt-1 w-56 rounded-lg border shadow-lg p-3 text-left">
-                            <div style={{ color: stat.color }} className="text-[11px] font-semibold mb-1">
-                              {stat.label}
-                            </div>
+                            className="absolute z-[201] right-0 mt-1 w-56 rounded-lg border shadow-lg p-3 text-left">
                             <div style={{ color: subtext }} className="text-xs leading-snug">
                               {stat.info}
                             </div>
@@ -1196,7 +1256,7 @@ export default function Simulator() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: idx * 0.05 }}
                 style={{ background: card, borderColor: border }}
-                className="rounded-xl border overflow-hidden">
+                className="rounded-xl border overflow-visible">
                 <div className="flex items-center justify-between px-4 py-2.5 border-b" style={{ borderColor: border }}>
                   <div className="flex items-center gap-2">
                     <div className="w-2.5 h-2.5 rounded-full" style={{ background: cfg.color }} />

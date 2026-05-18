@@ -15,6 +15,16 @@ export const featureConfigs = {
 
 export const featureKeys = Object.keys(featureConfigs);
 
+/**
+ * Order of hemodynamic charts on the Simulator page and metric tiles on the home page.
+ * With `grid-cols-4`, this fills row 1 (first 4), row 2 (next 4), row 3 (last 4), left → right.
+ */
+export const featureDisplayOrder = [
+  'MAP', 'HR', 'pulsatility', 'SBP',
+  'DBP', 'LVP', 'LVEDP', 'eseLV',
+  'pumpSpeed', 'motorCurrent', 'pumpFlow', 'tauLV',
+];
+
 const ts = (h) => {
   const d = new Date('2026-02-19T00:00:00');
   d.setHours(d.getHours() - 5 + h);

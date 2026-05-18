@@ -60,24 +60,12 @@ export function HeartLevel2({ features, status, compact = false }) {
       style={{ background: surface, borderColor: isDark ? '#334155' : surfaces.border }}
       className="w-full rounded-2xl border p-5 select-none"
     >
-      <div className="flex items-center justify-between mb-4">
-        {/* <div className="flex-1 text-center"> */}
-        <div>
-          <div style={{ color: text }} className="text-m font-semibold">Cardiac Status</div>
-          <div style={{ color: subtext }} className="text-xs mt-0.5">Live visualization</div>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <motion.div
-            animate={{ scale: beat ? 1.3 : 1, opacity: beat ? 1 : 0.6 }}
-            transition={{ duration: 0.15 }}
-            className="w-2 h-2 rounded-full"
-            style={{ background: color }}
-          />
-          <span style={{ color: subtext }} className="text-xs">{Math.round(bpm)} bpm</span>
-        </div>
+      <div className="text-center mb-4">
+        <div style={{ color: text }} className="text-m font-semibold">Cardiac Status</div>
+        <div style={{ color: subtext }} className="text-xs mt-0.5">Live visualization</div>
       </div>
 
-      <div className="flex justify-center mb-5">
+      <div className="flex justify-center mb-4">
         <motion.div
           animate={{ scale: beat ? 1.04 : 1 }}
           transition={{ duration: 0.18, ease: [0.25, 0.46, 0.45, 0.94] }}
@@ -96,6 +84,17 @@ export function HeartLevel2({ features, status, compact = false }) {
         </motion.div>
       </div>
 
+      <div className="flex justify-center items-center gap-1.5">
+        <motion.div
+          animate={{ scale: beat ? 1.3 : 1, opacity: beat ? 1 : 0.6 }}
+          transition={{ duration: 0.15 }}
+          className="w-2 h-2 rounded-full flex-shrink-0"
+          style={{ background: color }}
+        />
+        <span style={{ color: subtext }} className="text-xs tabular-nums">
+          {Math.round(bpm)} bpm
+        </span>
+      </div>
     </div>
   );
 }

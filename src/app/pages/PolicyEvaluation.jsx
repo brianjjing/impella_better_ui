@@ -15,14 +15,28 @@ function PolicyDistributionChart({
   policyData,
   hoveredBarIndex,
   setHoveredBarIndex,
-  patient,
   scheme,
   gridColor,
   subtext,
   card,
   border,
   text,
+  baselinePumpLabel,
+  baselineLabelWord,
 }) {
+  const baselinePumpProb = useMemo(
+    () => (baselinePumpLabel
+      ? policyData.find(d => d.label === baselinePumpLabel)?.probability ?? 0
+      : 0),
+    [baselinePumpLabel, policyData],
+  );
+  const recommendedPumpItem = useMemo(() => policyData.find(d => d.isMax), [policyData]);
+  const recommendedPumpLabel = recommendedPumpItem?.label ?? null;
+  const recommendedPumpProb = recommendedPumpItem?.probability ?? 0;
+  const labelsOverlap = Boolean(
+    baselinePumpLabel && recommendedPumpLabel && baselinePumpLabel === recommendedPumpLabel,
+  );
+
   const data = useMemo(
     () => ({
       labels: policyData.map(d => d.label),
@@ -36,28 +50,20 @@ function PolicyDistributionChart({
             const i = ctx.dataIndex;
             const d = policyData[i];
             const isHovered = hoveredBarIndex === i;
-            const fill = d?.isMax ? scheme.good : scheme.primary;
-            if (isHovered || d?.isMax) return fill;
+            const sameBar =
+              baselinePumpLabel &&
+              recommendedPumpLabel &&
+              baselinePumpLabel === recommendedPumpLabel &&
+              d?.label === baselinePumpLabel;
+            const useRecommendedColor = Boolean(d?.isMax || sameBar);
+            const fill = useRecommendedColor ? scheme.good : scheme.primary;
+            if (isHovered || useRecommendedColor) return fill;
             return fill.length === 7 ? `${fill}A6` : fill;
           },
         },
       ],
     }),
-    [policyData, hoveredBarIndex, scheme],
-  );
-
-  const currentPumpLabel = patient?.deviceLevel != null ? `P${patient.deviceLevel}` : null;
-  const currentPumpProb = useMemo(
-    () => (currentPumpLabel
-      ? policyData.find(d => d.label === currentPumpLabel)?.probability ?? 0
-      : 0),
-    [currentPumpLabel, policyData],
-  );
-  const recommendedPumpItem = useMemo(() => policyData.find(d => d.isMax), [policyData]);
-  const recommendedPumpLabel = recommendedPumpItem?.label ?? null;
-  const recommendedPumpProb = recommendedPumpItem?.probability ?? 0;
-  const labelsOverlap = Boolean(
-    currentPumpLabel && recommendedPumpLabel && currentPumpLabel === recommendedPumpLabel,
+    [policyData, hoveredBarIndex, scheme, baselinePumpLabel, recommendedPumpLabel],
   );
 
   const options = useMemo(
@@ -65,9 +71,8 @@ function PolicyDistributionChart({
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      // Pixel headroom so labels above a 100% bar still have room to render
-      // even though the data range stops exactly at 100%.
-      layout: { padding: { top: 16 } },
+      // Extra top padding when the combined Recommended / + / baseline label stacks 3 lines.
+      layout: { padding: { top: labelsOverlap ? 36 : 16 } },
       onHover: (event, elements) => {
         if (elements?.length) setHoveredBarIndex(elements[0].index);
         else setHoveredBarIndex(null);
@@ -86,26 +91,36 @@ function PolicyDistributionChart({
               padding: 2,
               position: { x: 'center', y: 'end' },
             };
-            if (currentPumpLabel) {
-              ann.currentLabel = {
-                ...labelStyle,
-                xValue: currentPumpLabel,
-                yValue: currentPumpProb,
-                yAdjust: -4,
-                content: 'Current',
-                color: scheme.primary,
-              };
-            }
-            if (recommendedPumpLabel) {
-              ann.recommendedLabel = {
+            if (labelsOverlap && recommendedPumpLabel) {
+              ann.overlapLabel = {
                 ...labelStyle,
                 xValue: recommendedPumpLabel,
                 yValue: recommendedPumpProb,
-                // If current and recommended share a bar, stack recommended above current.
-                yAdjust: labelsOverlap ? -22 : -4,
-                content: 'Recommended',
+                yAdjust: -4,
+                content: ['Recommended', '+', baselineLabelWord],
                 color: scheme.good,
               };
+            } else {
+              if (baselinePumpLabel) {
+                ann.baselineLabel = {
+                  ...labelStyle,
+                  xValue: baselinePumpLabel,
+                  yValue: baselinePumpProb,
+                  yAdjust: -4,
+                  content: baselineLabelWord,
+                  color: scheme.primary,
+                };
+              }
+              if (recommendedPumpLabel) {
+                ann.recommendedLabel = {
+                  ...labelStyle,
+                  xValue: recommendedPumpLabel,
+                  yValue: recommendedPumpProb,
+                  yAdjust: -4,
+                  content: 'Recommended',
+                  color: scheme.good,
+                };
+              }
             }
             return ann;
           })(),
@@ -149,7 +164,7 @@ function PolicyDistributionChart({
         },
       },
     }),
-    [patient, scheme, gridColor, subtext, card, border, text, setHoveredBarIndex, currentPumpLabel, currentPumpProb, recommendedPumpLabel, recommendedPumpProb, labelsOverlap],
+    [scheme, gridColor, subtext, card, border, text, setHoveredBarIndex, baselinePumpLabel, baselinePumpProb, baselineLabelWord, recommendedPumpLabel, recommendedPumpProb, labelsOverlap],
   );
 
   return <Bar data={data} options={options} />;
@@ -222,6 +237,18 @@ export default function PolicyEvaluation() {
 
   const patient  = patients.find(p => p.id === selectedPatientId);
 
+  const baselinePumpLevel = useMemo(() => {
+    if (selectedHour >= 1) {
+      const seq = simulatorState?.lastRunPumpSequence;
+      if (seq?.length >= selectedHour) return seq[selectedHour - 1];
+      return null;
+    }
+    return typeof patient?.deviceLevel === 'number' ? patient.deviceLevel : null;
+  }, [selectedHour, simulatorState?.lastRunPumpSequence, patient?.deviceLevel]);
+
+  const baselinePumpLabel = baselinePumpLevel != null ? `P${baselinePumpLevel}` : null;
+  const baselineLabelWord = selectedHour >= 1 ? 'Simulated' : 'Current';
+
   useEffect(() => {
     if (!selectedPatientId) return;
     let cancelled = false;
@@ -279,7 +306,7 @@ export default function PolicyEvaluation() {
 
   const mostLikelyAction = hasPolicyData ? PUMP_LABELS[dist.indexOf(maxProb)] : '—';
   const recommendedLevel = hasPolicyData ? dist.indexOf(maxProb) + 2 : null;
-  const stabilityIndex =
+  const pumpLevelScore =
     hasPolicyData && policyApi?.rollout?.finalScore != null
       ? Number(policyApi.rollout.finalScore).toFixed(1)
       : null;
@@ -352,7 +379,7 @@ export default function PolicyEvaluation() {
                   type="button"
                   disabled={!enabled}
                   onClick={() => enabled && setSelectedHour(h)}
-                  title={enabled ? `Evaluate at Hour ${h}` : ''}
+                  title={enabled ? (h === 0 ? 'Evaluate at Current Hour' : `Evaluate at Hour ${h}`) : ''}
                   style={{
                     background: active ? scheme.primary + '22' : (enabled ? card : muted),
                     borderColor: active ? scheme.primary + '88' : border,
@@ -361,7 +388,7 @@ export default function PolicyEvaluation() {
                     cursor: enabled ? 'pointer' : 'not-allowed',
                   }}
                   className="w-full px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all">
-                  Hour {h}
+                  {h === 0 ? 'Current Hour' : `Hour ${h}`}
                 </button>
                 {!enabled && (
                   <div
@@ -380,14 +407,16 @@ export default function PolicyEvaluation() {
           </p>
         )}
 
-        {/* Key Metrics Row — same order as Simulator: current, recommended, stability */}
+        {/* Key Metrics Row — same order as Simulator: baseline (current vs simulated), recommended, pump level score */}
         <div className="grid grid-cols-3 gap-3">
           {[
             {
-              label: 'Current Pump Level',
+              label: baselineLabelWord === 'Simulated' ? 'Simulated Pump Level' : 'Current Pump Level',
               color: scheme.accent,
-              value: typeof patient?.deviceLevel === 'number' ? `P${patient.deviceLevel}` : '—',
-              desc: 'Active pump power level from patient device data.',
+              value: baselinePumpLevel != null ? `P${baselinePumpLevel}` : '—',
+              desc: selectedHour >= 1
+                ? 'Pump level from the simulator trajectory at this forecast hour.'
+                : 'Active pump power level from patient device data.',
               icon: Activity,
               bg: scheme.accent + '12',
             },
@@ -396,17 +425,17 @@ export default function PolicyEvaluation() {
               color: scheme.good,
               value: recommendedLevel != null ? `P${recommendedLevel}` : '—',
               desc: hasPolicyData
-                ? `${(maxProb * 100).toFixed(0)}% probability — highest-confidence action`
+                ? `${(maxProb * 100).toFixed(0)}% probability of being deemed best action - highest-confidence`
                 : 'Awaiting API response',
               icon: Star,
               bg: scheme.good + '12',
             },
             {
-              label: 'Stability Index',
+              label: 'Pump Level Score',
               color: scheme.primary,
-              value: stabilityIndex ?? '—',
+              value: pumpLevelScore ?? '—',
               desc: hasPolicyData
-                ? 'Stability index 0–10 (higher is better), from the policy rollout weaning metric.'
+                ? "0–10 score on the simulated P-level's effectiveness, based on hemodynamic stability."
                 : 'Awaiting API response',
               icon: Award,
               bg: scheme.primary + '12',
@@ -438,7 +467,9 @@ export default function PolicyEvaluation() {
               </p>
             </div>
             <div style={{ background: scheme.primary + '18', color: scheme.primary }} className="text-xs px-3 py-1.5 rounded-full">
-              P{patient?.deviceLevel} active
+              {selectedHour === 0
+                ? <>P{patient?.deviceLevel ?? '—'} active</>
+                : <>P{baselinePumpLevel ?? '—'} simulated</>}
             </div>
           </div>
           <div style={{ height: 280 }}>
@@ -446,13 +477,14 @@ export default function PolicyEvaluation() {
               policyData={policyData}
               hoveredBarIndex={hoveredBarIndex}
               setHoveredBarIndex={setHoveredBarIndex}
-              patient={patient}
               scheme={scheme}
               gridColor={gridColor}
               subtext={subtext}
               card={card}
               border={border}
               text={text}
+              baselinePumpLabel={baselinePumpLabel}
+              baselineLabelWord={baselineLabelWord}
             />
           </div>
           {/* <div className="mt-3 flex items-center gap-4">
