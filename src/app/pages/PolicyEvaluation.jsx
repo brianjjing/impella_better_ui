@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Bar } from 'react-chartjs-2';
 import { useSearchParams } from 'react-router';
-import { Activity, Star, ArrowDown, ArrowRight, AlertCircle, Award, Coins } from 'lucide-react';
+import { Activity, Star, AlertCircle, Award } from 'lucide-react';
 import { useTheme, getSurfaces } from '../context/ThemeContext';
 import { useLayoutContext } from '../components/Layout';
 import { useSimulatorContext } from '../context/SimulatorContext';
@@ -46,11 +46,28 @@ function PolicyDistributionChart({
     [policyData, hoveredBarIndex, scheme],
   );
 
+  const currentPumpLabel = patient?.deviceLevel != null ? `P${patient.deviceLevel}` : null;
+  const currentPumpProb = useMemo(
+    () => (currentPumpLabel
+      ? policyData.find(d => d.label === currentPumpLabel)?.probability ?? 0
+      : 0),
+    [currentPumpLabel, policyData],
+  );
+  const recommendedPumpItem = useMemo(() => policyData.find(d => d.isMax), [policyData]);
+  const recommendedPumpLabel = recommendedPumpItem?.label ?? null;
+  const recommendedPumpProb = recommendedPumpItem?.probability ?? 0;
+  const labelsOverlap = Boolean(
+    currentPumpLabel && recommendedPumpLabel && currentPumpLabel === recommendedPumpLabel,
+  );
+
   const options = useMemo(
     () => ({
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
+      // Pixel headroom so labels above a 100% bar still have room to render
+      // even though the data range stops exactly at 100%.
+      layout: { padding: { top: 16 } },
       onHover: (event, elements) => {
         if (elements?.length) setHoveredBarIndex(elements[0].index);
         else setHoveredBarIndex(null);
@@ -58,27 +75,40 @@ function PolicyDistributionChart({
       plugins: {
         legend: { display: false },
         annotation: {
-          common: { drawTime: 'beforeDatasetsDraw' },
-          annotations:
-            patient?.deviceLevel != null
-              ? {
-                  currentPump: {
-                    type: 'line',
-                    scaleID: 'x',
-                    value: `P${patient.deviceLevel}`,
-                    borderColor: scheme.accent,
-                    borderWidth: 2,
-                    borderDash: [4, 3],
-                    label: {
-                      display: true,
-                      content: 'Current',
-                      position: 'start',
-                      color: scheme.accent,
-                      font: { size: 9 },
-                    },
-                  },
-                }
-              : {},
+          clip: false,
+          common: { drawTime: 'afterDatasetsDraw' },
+          annotations: (() => {
+            const ann = {};
+            const labelStyle = {
+              type: 'label',
+              backgroundColor: 'transparent',
+              font: { size: 10, weight: 'bold' },
+              padding: 2,
+              position: { x: 'center', y: 'end' },
+            };
+            if (currentPumpLabel) {
+              ann.currentLabel = {
+                ...labelStyle,
+                xValue: currentPumpLabel,
+                yValue: currentPumpProb,
+                yAdjust: -4,
+                content: 'Current',
+                color: scheme.primary,
+              };
+            }
+            if (recommendedPumpLabel) {
+              ann.recommendedLabel = {
+                ...labelStyle,
+                xValue: recommendedPumpLabel,
+                yValue: recommendedPumpProb,
+                // If current and recommended share a bar, stack recommended above current.
+                yAdjust: labelsOverlap ? -22 : -4,
+                content: 'Recommended',
+                color: scheme.good,
+              };
+            }
+            return ann;
+          })(),
         },
         tooltip: {
           backgroundColor: card,
@@ -112,13 +142,14 @@ function PolicyDistributionChart({
           ticks: {
             color: subtext,
             font: { size: 10 },
+            stepSize: 0.2,
             callback: v => `${(v * 100).toFixed(0)}%`,
           },
           border: { display: false },
         },
       },
     }),
-    [patient, scheme, gridColor, subtext, card, border, text, setHoveredBarIndex],
+    [patient, scheme, gridColor, subtext, card, border, text, setHoveredBarIndex, currentPumpLabel, currentPumpProb, recommendedPumpLabel, recommendedPumpProb, labelsOverlap],
   );
 
   return <Bar data={data} options={options} />;
@@ -239,19 +270,6 @@ export default function PolicyEvaluation() {
 
   const dist = hasPolicyData ? policyApi.distribution : [0, 0, 0, 0, 0, 0, 0, 0];
 
-  const r1FromApi = policyApi?.rollout
-    ? {
-        id: policyApi.rollout.id,
-        label: policyApi.rollout.label,
-        quality: policyApi.rollout.quality,
-        totalReward: policyApi.rollout.totalReward,
-        finalScore: policyApi.rollout.finalScore,
-        steps: policyApi.rollout.steps,
-      }
-    : null;
-
-  const r1 = r1FromApi;
-
   const maxProb = Math.max(...dist);
   const policyData = PUMP_LABELS.map((label, i) => ({
     label,
@@ -260,10 +278,11 @@ export default function PolicyEvaluation() {
   }));
 
   const mostLikelyAction = hasPolicyData ? PUMP_LABELS[dist.indexOf(maxProb)] : '—';
-  const entropy = hasPolicyData
-    ? (-dist.reduce((s, p) => s + (p > 0 ? p * Math.log(p) : 0), 0)).toFixed(3)
-    : '—';
-  const weaningDown = hasPolicyData && dist.slice(0, 4).reduce((a, b) => a + b, 0) > 0.5;
+  const recommendedLevel = hasPolicyData ? dist.indexOf(maxProb) + 2 : null;
+  const stabilityIndex =
+    hasPolicyData && policyApi?.rollout?.finalScore != null
+      ? Number(policyApi.rollout.finalScore).toFixed(1)
+      : null;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -272,7 +291,7 @@ export default function PolicyEvaluation() {
         <Activity size={16} style={{ color: scheme.primary }} />
         <div>
           <h1 style={{ color: text }} className="text-sm font-semibold">Weaning Policy Evaluation</h1>
-          <p style={{ color: subtext }} className="text-xs">AI-guided weaning recommendations · action probabilities and predicted patient trajectories</p>
+          <p style={{ color: subtext }} className="text-xs">Success Probability Distribution of P-Levels</p>
         </div>
         <div className="ml-auto flex items-center gap-3">
           <div style={{ background: scheme.primary + '18', color: scheme.primary, borderColor: scheme.primary + '44' }}
@@ -328,47 +347,54 @@ export default function PolicyEvaluation() {
             const enabled = isHourEnabled(h);
             const active = selectedHour === h;
             return (
-              <button
-                key={h}
-                type="button"
-                disabled={!enabled}
-                onClick={() => enabled && setSelectedHour(h)}
-                title={
-                  enabled
-                    ? `Evaluate at Hour ${h}`
-                    : 'Run the full simulator forecast to enable this hour'
-                }
-                style={{
-                  background: active ? scheme.primary + '22' : (enabled ? card : muted),
-                  borderColor: active ? scheme.primary + '88' : border,
-                  color: active ? scheme.primary : (enabled ? text : subtext),
-                  opacity: enabled ? 1 : 0.5,
-                  cursor: enabled ? 'pointer' : 'not-allowed',
-                }}
-                className="flex-1 px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all">
-                Hour {h}
-              </button>
+              <div key={h} className="flex-1 relative group">
+                <button
+                  type="button"
+                  disabled={!enabled}
+                  onClick={() => enabled && setSelectedHour(h)}
+                  title={enabled ? `Evaluate at Hour ${h}` : ''}
+                  style={{
+                    background: active ? scheme.primary + '22' : (enabled ? card : muted),
+                    borderColor: active ? scheme.primary + '88' : border,
+                    color: active ? scheme.primary : (enabled ? text : subtext),
+                    opacity: enabled ? 1 : 0.5,
+                    cursor: enabled ? 'pointer' : 'not-allowed',
+                  }}
+                  className="w-full px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all">
+                  Hour {h}
+                </button>
+                {!enabled && (
+                  <div
+                    style={{ background: card, borderColor: border, color: text }}
+                    className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1 z-50 whitespace-nowrap px-2.5 py-1.5 rounded-lg border shadow-lg text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-75">
+                    Run the simulator for this hour to evaluate it!
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
-        {!simulatorHasResult && (
-          <p style={{ color: subtext }} className="text-xs -mt-2">
-            Hour 1…Hour {horizonHours} unlock once the full forecast is run on the Simulator page.
-          </p>
-        )}
         {simulatorHasResult && horizonHours < 6 && (
           <p style={{ color: subtext }} className="text-xs -mt-2">
             Hour {horizonHours + 1}{horizonHours + 1 < 6 ? `…Hour 6` : ''} {horizonHours + 1 < 6 ? 'are' : 'is'} outside the simulator horizon.
           </p>
         )}
 
-        {/* Key Metrics Row */}
+        {/* Key Metrics Row — same order as Simulator: current, recommended, stability */}
         <div className="grid grid-cols-3 gap-3">
           {[
             {
+              label: 'Current Pump Level',
+              color: scheme.accent,
+              value: typeof patient?.deviceLevel === 'number' ? `P${patient.deviceLevel}` : '—',
+              desc: 'Active pump power level from patient device data.',
+              icon: Activity,
+              bg: scheme.accent + '12',
+            },
+            {
               label: 'Recommended Pump Level',
               color: scheme.good,
-              value: mostLikelyAction,
+              value: recommendedLevel != null ? `P${recommendedLevel}` : '—',
               desc: hasPolicyData
                 ? `${(maxProb * 100).toFixed(0)}% probability — highest-confidence action`
                 : 'Awaiting API response',
@@ -376,24 +402,14 @@ export default function PolicyEvaluation() {
               bg: scheme.good + '12',
             },
             {
-              label: 'Weaning Direction',
+              label: 'Stability Index',
               color: scheme.primary,
-              value: hasPolicyData ? (weaningDown ? 'Reducing ↓' : 'Maintaining →') : '—',
+              value: stabilityIndex ?? '—',
               desc: hasPolicyData
-                ? (weaningDown ? 'AI recommends reducing pump support' : 'AI recommends maintaining current support')
+                ? 'Stability index 0–10 (higher is better), from the policy rollout weaning metric.'
                 : 'Awaiting API response',
-              icon: hasPolicyData ? (weaningDown ? ArrowDown : ArrowRight) : ArrowRight,
+              icon: Award,
               bg: scheme.primary + '12',
-            },
-            {
-            label: 'Reward',                                                                                        
-            color: scheme.accent,                                                                                   
-            value: hasPolicyData && r1?.totalReward != null ? Number(r1.totalReward).toFixed(2) : '—',              
-            desc: hasPolicyData
-              ? 'Cumulative reward across the projected trajectory'
-              : 'Awaiting API response',
-            icon: Coins,                                                                                            
-            bg: scheme.accent + '12',                                                                                                                                                            
             },
           ].map(({ label, value, desc, color, icon: Icon, bg: ibg }) => (
             <motion.div key={label}
@@ -412,14 +428,13 @@ export default function PolicyEvaluation() {
           ))}
         </div>
 
-        {/* Action Probability Distribution */}
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
           style={{ background: card, borderColor: border }} className="rounded-xl border p-5">
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h2 style={{ color: text }} className="text-sm font-semibold">Action Probability Distribution</h2>
+              <h2 style={{ color: text }} className="text-sm font-semibold">Success Probability Distribution</h2>
               <p style={{ color: subtext }} className="text-xs mt-0.5">
-                Likelihood of each pump power level being recommended given the patient's current hemodynamic state
+                Likelihood of each pump level being deemed best, given patient's hemodynamic state
               </p>
             </div>
             <div style={{ background: scheme.primary + '18', color: scheme.primary }} className="text-xs px-3 py-1.5 rounded-full">
@@ -440,7 +455,7 @@ export default function PolicyEvaluation() {
               text={text}
             />
           </div>
-          <div className="mt-3 flex items-center gap-4">
+          {/* <div className="mt-3 flex items-center gap-4">
             <div className="flex items-center gap-1.5">
               <div className="w-3 h-3 rounded-sm" style={{ background: scheme.good }} />
               <span style={{ color: subtext }} className="text-xs">Recommended action</span>
@@ -449,11 +464,7 @@ export default function PolicyEvaluation() {
               <div className="w-3 h-3 rounded-sm" style={{ background: scheme.primary, opacity: 0.65 }} />
               <span style={{ color: subtext }} className="text-xs">Alternative actions</span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-0.5 rounded" style={{ background: scheme.accent }} />
-              <span style={{ color: subtext }} className="text-xs">Current pump level</span>
-            </div>
-          </div>
+          </div> */}
         </motion.div>
       </div>
     </div>

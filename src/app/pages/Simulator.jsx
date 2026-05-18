@@ -2,7 +2,7 @@ import { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Line } from 'react-chartjs-2';
 import { useNavigate } from 'react-router';
-import { Sliders, Play, TrendingUp, TrendingDown, Minus, RotateCcw, Activity, X, ArrowUp, ArrowDown, ArrowRight } from 'lucide-react';
+import { Sliders, Play, TrendingUp, TrendingDown, Minus, RotateCcw, Activity, X, ArrowUp, ArrowDown, ArrowRight, Info } from 'lucide-react';
 import { useTheme, getSurfaces } from '../context/ThemeContext';
 import { useSimulatorContext, emptyPumpSequence } from '../context/SimulatorContext';
 import { featureConfigs, featureKeys } from '../data/mockData';
@@ -11,9 +11,7 @@ import { continuousSeverityColor } from '../lib/continuousSeverityColor';
 import { useLayoutContext } from '../components/Layout';
 
 const FEATURE_GROUPS = [
-  { label: 'Hemodynamics', keys: ['MAP', 'SBP', 'DBP', 'HR'] },
-  { label: 'Cardiac Function', keys: ['LVP', 'LVEDP', 'pulsatility', 'eseLV'] },
-  { label: 'Pump Metrics', keys: ['pumpSpeed', 'motorCurrent', 'pumpFlow', 'tauLV'] },
+  { label: 'All', keys: ['MAP', 'HR', 'pulsatility', 'SBP', 'DBP', 'LVP', 'LVEDP', 'eseLV', 'pumpSpeed', 'motorCurrent', 'pumpFlow', 'tauLV'] },
 ];
 
 /** Vivid amber for forecast series (high contrast on dark/light charts) */
@@ -238,8 +236,6 @@ function SimulatorFeatureChart({
         const c = chart ?? chartRef.current;
         if (!c) return;
         const nativeEvent = event?.native ?? event;
-        // First try a precise hit on a dot. If that misses, snap to the
-        // nearest hour-boundary point so the overlay still surfaces.
         let els = c.getElementsAtEventForMode(
           nativeEvent,
           'nearest',
@@ -265,7 +261,6 @@ function SimulatorFeatureChart({
     [options],
   );
 
-  // Re-render the overlay after the chart resizes so positions stay in sync.
   useEffect(() => {
     const c = chartRef.current;
     const canvas = c?.canvas;
@@ -377,94 +372,46 @@ function SimulatorFeatureChart({
 }
 
 
-const P_LEVEL_OPTIONS = [null, 2, 3, 4, 5, 6, 7, 8, 9];
-
-function PLevelDropdown({ value, onChange, card, border, subtext, scheme }) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocPointerDown = e => {
-      if (!wrapRef.current?.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDocPointerDown);
-    return () => document.removeEventListener('mousedown', onDocPointerDown);
-  }, [open]);
-
-  const display = value == null ? '—' : `P${value}`;
-  const isSet = value != null;
-
-  return (
-    <div ref={wrapRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        style={{
-          background: card,
-          borderColor: open ? scheme.primary : border,
-          color: isSet ? scheme.primary : subtext,
-        }}
-        className="w-full px-1.5 py-1 rounded border text-[11px] font-mono font-semibold leading-none transition-colors hover:opacity-90">
-        {display}
-      </button>
-      {open && (
-        <div
-          style={{ background: card, borderColor: border }}
-          className="absolute z-50 left-0 right-0 mt-0.5 rounded border shadow-lg overflow-hidden">
-          {P_LEVEL_OPTIONS.map(p => {
-            const isSelected = p === value;
-            return (
-              <button
-                key={p ?? 'none'}
-                type="button"
-                onClick={() => {
-                  onChange(p);
-                  setOpen(false);
-                }}
-                style={{
-                  color: p == null ? subtext : scheme.primary,
-                  background: isSelected ? scheme.primary + '22' : 'transparent',
-                }}
-                className="block w-full px-1.5 py-1 text-[11px] font-mono font-semibold leading-none text-center hover:opacity-100 hover:bg-black/10">
-                {p == null ? '—' : `P${p}`}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /**
- * Draggable horizon picker (1..6 hours). Clicking or dragging the track
- * snaps the thumb to the nearest integer position. Changing the horizon
- * only affects the simulator display — the underlying pumpSequence in
- * state is preserved so widening the horizon restores prior P-levels.
+ * Vertical horizon picker (1..6 hours). Top of the track = 6 hours,
+ * bottom = 1 hour. Clicking or dragging snaps the thumb to the nearest
+ * integer position. Changing the horizon only affects the simulator
+ * display — the underlying pumpSequence in state is preserved so
+ * widening the horizon restores prior P-levels.
  */
 function HorizonSlider({ value, onChange, scheme, subtext, border, card, muted, isDark }) {
   const trackRef = useRef(null);
   const draggingRef = useRef(false);
 
-  const valueFromClientX = clientX => {
+  // Lighten a #RRGGBB hex by `amount` (0..1) toward white.
+  const lighten = (hex, amount) => {
+    if (typeof hex !== 'string' || !hex.startsWith('#') || hex.length !== 7) return hex;
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    const mix = c => Math.round(c + (255 - c) * amount);
+    return `#${[mix(r), mix(g), mix(b)].map(n => n.toString(16).padStart(2, '0')).join('')}`;
+  };
+  const selectedColor = lighten(scheme.primary, 0.35);
+
+  const valueFromClientY = clientY => {
     const track = trackRef.current;
     if (!track) return value;
     const rect = track.getBoundingClientRect();
-    if (rect.width <= 0) return value;
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    return Math.max(1, Math.min(6, Math.round(ratio * 5) + 1));
+    if (rect.height <= 0) return value;
+    const ratio = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+    return Math.max(1, Math.min(6, 6 - Math.round(ratio * 5)));
   };
 
   const handlePointerDown = e => {
     e.preventDefault();
     draggingRef.current = true;
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    onChange(valueFromClientX(e.clientX));
+    onChange(valueFromClientY(e.clientY));
   };
   const handlePointerMove = e => {
     if (!draggingRef.current) return;
-    onChange(valueFromClientX(e.clientX));
+    onChange(valueFromClientY(e.clientY));
   };
   const handlePointerUp = e => {
     if (!draggingRef.current) return;
@@ -472,18 +419,14 @@ function HorizonSlider({ value, onChange, scheme, subtext, border, card, muted, 
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
   };
 
-  const pct = ((value - 1) / 5) * 100;
   const trackBg = isDark ? '#374151' : '#E5E7EB';
 
   return (
-    <div className="w-full px-2 select-none">
-      <div className="flex items-center justify-between mb-1">
-        <span style={{ color: subtext }} className="text-[10px] font-semibold uppercase tracking-wider">
+    <div className="h-full flex flex-col items-center select-none">
+      <div className="text-center mb-3">
+        <div style={{ color: subtext }} className="text-[10px] font-semibold uppercase tracking-wider leading-none">
           Horizon
-        </span>
-        <span style={{ color: scheme.primary }} className="text-[11px] font-mono font-semibold">
-          {value} {value === 1 ? 'hour' : 'hours'}
-        </span>
+        </div>
       </div>
       <div
         ref={trackRef}
@@ -491,59 +434,43 @@ function HorizonSlider({ value, onChange, scheme, subtext, border, card, muted, 
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        className="relative h-6 flex items-center cursor-pointer"
-        style={{ touchAction: 'none' }}>
-        <div className="absolute left-0 right-0 rounded-full" style={{ height: 3, background: trackBg }} />
+        className="relative flex-1 cursor-pointer my-1"
+        style={{ touchAction: 'none', width: 36 }}>
         <div
-          className="absolute left-0 rounded-full"
-          style={{ height: 3, width: `${pct}%`, background: scheme.primary }}
+          className="absolute rounded-full"
+          style={{ width: 3, top: 0, bottom: 0, left: '50%', transform: 'translateX(-50%)', background: trackBg }}
         />
         {[1, 2, 3, 4, 5, 6].map((n, i) => {
-          const left = (i / 5) * 100;
-          const isActive = n <= value;
+          const top = ((5 - i) / 5) * 100;
+          const isSelected = n === value;
+          const size = isSelected ? 16.2 : 12;
           return (
-            <div
-              key={n}
-              className="absolute rounded-full"
-              style={{
-                left: `${left}%`,
-                transform: 'translate(-50%, -50%)',
-                top: '50%',
-                width: 8,
-                height: 8,
-                background: isActive ? scheme.primary : (muted ?? trackBg),
-                border: `1.5px solid ${isActive ? scheme.primary : subtext}`,
-              }}
-            />
+            <div key={n}>
+              <div
+                className="absolute rounded-full"
+                style={{
+                  top: `${top}%`,
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: size,
+                  height: size,
+                  background: isSelected ? selectedColor : scheme.primary,
+                  border: `1.5px solid ${isSelected ? selectedColor : scheme.primary}`,
+                }}
+              />
+              <span
+                className="absolute text-[10px] font-mono font-semibold leading-none"
+                style={{
+                  color: isSelected ? selectedColor : subtext,
+                  top: `${top}%`,
+                  left: 'calc(50% + 12px)',
+                  transform: 'translateY(-50%)',
+                }}>
+                {n}
+              </span>
+            </div>
           );
         })}
-        <div
-          className="absolute rounded-full pointer-events-none"
-          style={{
-            left: `${pct}%`,
-            transform: 'translate(-50%, -50%)',
-            top: '50%',
-            width: 14,
-            height: 14,
-            background: scheme.primary,
-            border: `2px solid ${card}`,
-            boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
-          }}
-        />
-      </div>
-      <div className="relative h-4 mt-0.5">
-        {[1, 2, 3, 4, 5, 6].map((n, i) => (
-          <div
-            key={n}
-            className="absolute"
-            style={{ left: `${(i / 5) * 100}%`, transform: 'translateX(-50%)' }}>
-            <span
-              style={{ color: n === value ? scheme.primary : subtext }}
-              className="text-[10px] font-mono font-semibold">
-              {n}
-            </span>
-          </div>
-        ))}
       </div>
     </div>
   );
@@ -553,9 +480,9 @@ function HorizonSlider({ value, onChange, scheme, subtext, border, card, muted, 
  * Pinned P-level sequence configuration chart.
  * X-axis: Hour 0 (current, non-configurable, from patient.deviceLevel)
  *         followed by Hour 1 … Hour 6 (6 draggable dots).
- * Y-axis: 1 (unset) at the bottom, then P2 … P9.
- * The configurable dots are draggable vertically; each snaps to an integer
- * P-level (or below P2 → unset). The line connects all seven dots.
+ * Y-axis: P2 … P9.
+ * The configurable dots are draggable vertically and snap to an integer
+ * P-level. The line connects all seven dots.
  */
 function PLevelConfigChart({
   pumpSequence,
@@ -571,37 +498,25 @@ function PLevelConfigChart({
 }) {
   const chartRef = useRef(/** @type {import('chart.js').Chart | null} */ (null));
   const dragRef = useRef(/** @type {{ idx: number; pointerId: number } | null} */ (null));
-  const [tickXs, setTickXs] = useState(/** @type {number[]} */ ([]));
-  // Constant blink for the 6 configurable dots — matches HeartLevel1's brief
-  // "beat" pattern but at a fixed cadence shared across all patients.
-  const [beat, setBeat] = useState(false);
-  useEffect(() => {
-    const pulse = () => {
-      setBeat(true);
-      setTimeout(() => setBeat(false), 150);
-    };
-    pulse();
-    const id = setInterval(pulse, 900);
-    return () => clearInterval(id);
-  }, []);
 
   // Clamp horizon to the supported range (1..6). The chart shows Hour 0
   // plus `horizon` configurable hours; pumpSequence stays length-6 in state
   // so the values outside the horizon are preserved if the user widens it.
   const horizon = Math.max(1, Math.min(6, typeof horizonHours === 'number' ? horizonHours : 6));
   const labels = useMemo(
-    () => ['Hour 0', ...Array.from({ length: horizon }, (_, i) => `Hour ${i + 1}`)],
+    () => ['0', ...Array.from({ length: horizon }, (_, i) => `${i + 1}`)],
     [horizon],
   );
-  // y = 1 represents "not chosen" (sits below P2 at the bottom of the axis).
   // Index 0 is the read-only current P-level pulled from patient data.
-  const currentY = typeof currentLevel === 'number' ? currentLevel : 1;
+  // Hours with no explicit value fall back to the current P-level so the line
+  // is always continuous (the "unset" state no longer exists).
+  const currentY = typeof currentLevel === 'number' && currentLevel >= 2 ? currentLevel : 2;
   const yValues = useMemo(
     () => [
       currentY,
       ...pumpSequence
         .slice(0, horizon)
-        .map(v => (typeof v === 'number' ? v : 1)),
+        .map(v => (typeof v === 'number' && v >= 2 ? v : currentY)),
     ],
     [currentY, pumpSequence, horizon],
   );
@@ -617,19 +532,16 @@ function PLevelConfigChart({
           tension: 0,
           spanGaps: false,
           clip: false,
-          pointRadius: yValues.map((_, i) => (i > 0 && beat ? 7.5 : 6)),
-          pointHoverRadius: yValues.map((_, i) => (i > 0 && beat ? 8.25 : 7.5)),
+          pointRadius: 4,
+          pointHoverRadius: 5,
           pointHitRadius: 28,
-          pointBackgroundColor: yValues.map((v, i) => {
-            if (i === 0) return scheme.accent;
-            return v <= 1 ? (isDark ? card : '#ffffff') : scheme.primary;
-          }),
+          pointBackgroundColor: yValues.map((_, i) => (i === 0 ? scheme.accent : scheme.primary)),
           pointBorderColor: yValues.map((_, i) => (i === 0 ? scheme.accent : scheme.primary)),
-          pointBorderWidth: yValues.map((_, i) => (i > 0 && beat ? 2.625 : 1.875)),
+          pointBorderWidth: 1.25,
         },
       ],
     }),
-    [labels, yValues, scheme.primary, scheme.accent, card, isDark, beat],
+    [labels, yValues, scheme.primary, scheme.accent, card, isDark],
   );
 
   const options = useMemo(
@@ -637,7 +549,7 @@ function PLevelConfigChart({
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      layout: { padding: { top: 8, bottom: 0, right: 72 } },
+      layout: { padding: { top: 8, bottom: 4 } },
       plugins: {
         legend: { display: false },
         annotation: {
@@ -672,10 +584,8 @@ function PLevelConfigChart({
             label: ctx => {
               const i = ctx.dataIndex;
               const v = yValues[i];
-              if (i === 0) {
-                return v <= 1 ? 'Current — not set' : `Current — P${v} (read-only)`;
-              }
-              return v <= 1 ? 'Not set — drag up' : `P${v}`;
+              if (i === 0) return `Current — P${v} (read-only)`;
+              return `P${v}`;
             },
           },
         },
@@ -683,11 +593,21 @@ function PLevelConfigChart({
       scales: {
         x: {
           grid: { color: gridColor, lineWidth: 1 },
-          ticks: { display: false },
+          title: {
+            display: true,
+            text: 'Hour',
+            color: subtext,
+            font: { size: 11, weight: '600' },
+          },
+          ticks: {
+            display: true,
+            color: subtext,
+            font: { size: 11, weight: '500' },
+          },
           border: { display: false },
         },
         y: {
-          min: 1,
+          min: 2,
           max: 9,
           title: {
             display: true,
@@ -700,7 +620,7 @@ function PLevelConfigChart({
             font: { size: 10 },
             stepSize: 1,
             autoSkip: false,
-            callback: v => (v <= 1 ? '' : `P${v}`),
+            callback: v => `P${v}`,
           },
           grid: { color: gridColor, borderDash: [3, 3] },
           border: { display: false },
@@ -725,7 +645,7 @@ function PLevelConfigChart({
       const v = c.scales.y.getValueForPixel(clamped);
       if (!Number.isFinite(v)) return null;
       const rounded = Math.round(v);
-      return Math.min(9, Math.max(1, rounded));
+      return Math.min(9, Math.max(2, rounded));
     };
 
     const indexFromEvent = e => {
@@ -741,7 +661,7 @@ function PLevelConfigChart({
       if (chartIdx <= 0) return;
       setPumpSequence(prev => {
         const n = [...prev];
-        n[chartIdx - 1] = v <= 1 ? null : v;
+        n[chartIdx - 1] = v;
         return n;
       });
     };
@@ -794,80 +714,9 @@ function PLevelConfigChart({
     };
   }, [setPumpSequence]);
 
-  // Track x-pixel positions of each data point so we can align the dropdown
-  // row directly under each tick. Recomputes on resize.
-  useEffect(() => {
-    const compute = () => {
-      const c = chartRef.current;
-      const canvas = c?.canvas;
-      if (!c?.scales?.x || !canvas) return;
-      const canvasRect = canvas.getBoundingClientRect();
-      const wrap = canvas.parentElement?.parentElement; // canvas → chart wrapper → flex column
-      if (!wrap) return;
-      const wrapRect = wrap.getBoundingClientRect();
-      const offsetLeft = canvasRect.left - wrapRect.left;
-      const xs = labels.map((_, i) => offsetLeft + c.scales.x.getPixelForValue(i));
-      setTickXs(xs);
-    };
-    compute();
-    const c = chartRef.current;
-    const canvas = c?.canvas;
-    if (!canvas) return;
-    const ro = new ResizeObserver(() => requestAnimationFrame(compute));
-    ro.observe(canvas);
-    return () => ro.disconnect();
-  }, [labels]);
-
-  // chartIdx is into the 7-point chart array; pumpSequence is 6 entries
-  // mapped to chartIdx 1..6. chartIdx 0 (current state) is read-only and has
-  // no dropdown.
-  const handleDropdownChange = useCallback(
-    (chartIdx, newValue) => {
-      if (chartIdx <= 0) return;
-      setPumpSequence(prev => {
-        const n = [...prev];
-        n[chartIdx - 1] = newValue;
-        return n;
-      });
-    },
-    [setPumpSequence],
-  );
-
   return (
-    <div className="relative w-full h-full flex flex-col">
-      <div className="flex-1 min-h-0 relative">
-        <Line ref={chartRef} data={data} options={options} />
-      </div>
-      <div className="relative flex-shrink-0" style={{ height: 24 }}>
-        {tickXs.map((x, i) => (
-          <div key={`label-${i}`}
-            className="absolute top-0 bottom-0 flex items-center"
-            style={{ left: x, transform: 'translateX(-50%)' }}>
-            <span style={{ color: subtext }} className="text-[11px] font-medium leading-none whitespace-nowrap">
-              {labels[i]}
-            </span>
-          </div>
-        ))}
-        {tickXs.map((x, i) => {
-          if (i === 0) return null;
-          return (
-            <div key={`drop-${i}`}
-              className="absolute top-0 bottom-0 flex items-center"
-              style={{ left: x + 16, width: 44 }}>
-              <div className="w-full">
-                <PLevelDropdown
-                  value={pumpSequence[i - 1]}
-                  onChange={v => handleDropdownChange(i, v)}
-                  card={card}
-                  border={border}
-                  subtext={subtext}
-                  scheme={scheme}
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
+    <div className="relative w-full h-full">
+      <Line ref={chartRef} data={data} options={options} />
     </div>
   );
 }
@@ -886,6 +735,23 @@ export default function Simulator() {
   const patient = patients.find(p => p.id === selectedPatientId);
   const currentLevel = patient?.deviceLevel ?? 5;
 
+  // Which stat tile's info popover is currently open (label string), or null.
+  const [openInfo, setOpenInfo] = useState(null);
+  const infoWrapRef = useRef(null);
+  useEffect(() => {
+    if (!openInfo) return;
+    const onDocPointerDown = e => {
+      if (!infoWrapRef.current?.contains(e.target)) setOpenInfo(null);
+    };
+    const onKey = e => { if (e.key === 'Escape') setOpenInfo(null); };
+    document.addEventListener('mousedown', onDocPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [openInfo]);
+
   // Per-patient state lives in the context so it persists across navigation.
   const persisted = getStateFor(selectedPatientId);
   // Default the 6 configurable hours to the patient's current P-level. The
@@ -896,7 +762,13 @@ export default function Simulator() {
       : emptyPumpSequence()),
     [currentLevel],
   );
-  const pumpSequence = persisted?.pumpSequence ?? defaultPumpSeq;
+  // Any null slot (from the empty context default or older persisted state)
+  // falls back to the current P-level so every dot always has a valid value.
+  const pumpSequence = useMemo(() => {
+    const stored = persisted?.pumpSequence;
+    if (!stored || stored.every(v => v == null)) return defaultPumpSeq;
+    return stored.map(v => (typeof v === 'number' && v >= 2 && v <= 9 ? v : defaultPumpSeq[0]));
+  }, [persisted?.pumpSequence, defaultPumpSeq]);
   const horizonHours = persisted?.horizonHours ?? 6;
   const isRunning = persisted?.isRunning ?? false;
   const hasResult = persisted?.hasResult ?? false;
@@ -995,7 +867,12 @@ export default function Simulator() {
   const combinedData = useMemo(() => {
     if (!patient) return [];
     const hist = patient.timeline;
-    const all = hasResult ? [...hist, ...forecast] : hist;
+    // Forecast contains 6 dots per hour (one per +10 min step), so clip by
+    // horizonHours * 6 dots rather than by hours.
+    const clippedForecast = hasResult
+      ? forecast.slice(0, Math.max(0, Math.min(forecast.length, horizonHours * 6)))
+      : [];
+    const all = hasResult ? [...hist, ...clippedForecast] : hist;
     const rows = all.map((step, i) => {
       const isFore = i >= hist.length;
       const row = { label: step.label, isForecast: isFore };
@@ -1010,7 +887,7 @@ export default function Simulator() {
       return row;
     });
     return rows;
-  }, [patient, forecast, hasResult]);
+  }, [patient, forecast, hasResult, horizonHours]);
 
   const runSimulation = async () => {
     if (!canRunForecast || !patient) return;
@@ -1050,8 +927,11 @@ export default function Simulator() {
 
   const getTrend = feature => {
     if (!hasResult || forecast.length === 0 || !patient) return null;
+    // 6 forecast dots per hour; trend compares the current state to the
+    // forecasted state at the end of the selected horizon.
+    const lastIdx = Math.max(0, Math.min(forecast.length, horizonHours * 6) - 1);
     const current = patient.timeline[patient.timeline.length - 1][feature];
-    const predicted = forecast[forecast.length - 1][feature];
+    const predicted = forecast[lastIdx][feature];
     const diff = predicted - current;
     const pct = Math.abs(diff) / (Math.abs(current) || 1) * 100;
     return { diff, pct, direction: diff > 1 ? 'up' : diff < -1 ? 'down' : 'flat' };
@@ -1117,7 +997,7 @@ export default function Simulator() {
         <Sliders size={16} style={{ color: scheme.primary }} />
         <div>
           <h1 style={{ color: text }} className="text-sm font-semibold">Pump Level Simulator</h1>
-          <p style={{ color: subtext }} className="text-xs">10-min resolution · T-1h → T0h actual · T0h → Hour 6 forecast</p>
+          <p style={{ color: subtext }} className="text-xs">1-6 Hour Feature Forecast</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <span style={{ color: subtext }} className="text-xs">Patient:</span>
@@ -1134,24 +1014,23 @@ export default function Simulator() {
             {/* Left: recommendation summary (2/3 width) */}
             <div
               style={{ background: card, borderColor: border }}
-              className="w-2/3 rounded-2xl border-2 overflow-hidden flex flex-col">
+              className="w-1/2 rounded-2xl border-2 overflow-hidden flex flex-col">
               {/* Top 2/3: recommended pump change */}
               <div className="flex-[2] p-5 flex flex-col">
                 <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold">
                   Recommended Pump Change
                 </div>
-                <div className="flex-1 flex items-center gap-5 mt-2">
+                <div className="flex-1 flex items-center justify-center gap-2.5 mt-1">
                   <div
                     className="w-16 h-16 rounded-2xl flex items-center justify-center flex-shrink-0"
                     style={{ background: changeColor + '18' }}>
                     <ChangeIcon size={40} style={{ color: changeColor }} strokeWidth={2.5} />
                   </div>
-                  <span style={{ color: changeColor }} className="text-4xl font-bold tracking-tight">
+                  <span style={{ color: changeColor }} className="text-4xl tracking-wide font-bold">
                     {changeLabel}
                   </span>
                 </div>
               </div>
-              {/* Bottom 1/3: three stat cells */}
               <div
                 className="flex-1 grid grid-cols-3 border-t"
                 style={{ borderColor: border }}>
@@ -1165,17 +1044,45 @@ export default function Simulator() {
                     label: 'Recommended Pump Level',
                     value: recommendedLevel != null ? `P${recommendedLevel}` : '—',
                     color: scheme.good,
+                    info: "The AI policy's highest-probability pump power level (P2–P9) for this patient at the current state.",
                   },
                   {
                     label: 'Stability Index',
                     value: stabilityIndex ?? '—',
                     color: scheme.primary,
+                    info: 'Stability index 0–10 (higher is better), derived from the policy rollout weaning metric.',
                   },
                 ].map((stat, i) => (
                   <div
                     key={stat.label}
-                    className={'px-3 py-2 flex flex-col items-center justify-center text-center' + (i < 2 ? ' border-r' : '')}
+                    className={'relative px-3 py-2 flex flex-col items-center justify-center text-center' + (i < 2 ? ' border-r' : '')}
                     style={{ borderColor: border }}>
+                    {stat.info && (
+                      <div
+                        ref={openInfo === stat.label ? infoWrapRef : null}
+                        className="absolute top-1 right-1">
+                        <button
+                          type="button"
+                          aria-label={`About ${stat.label}`}
+                          onClick={() => setOpenInfo(openInfo === stat.label ? null : stat.label)}
+                          style={{ color: subtext }}
+                          className="p-0.5 rounded-full hover:opacity-80 transition-opacity">
+                          <Info size={14} />
+                        </button>
+                        {openInfo === stat.label && (
+                          <div
+                            style={{ background: card, borderColor: border, color: text }}
+                            className="absolute z-50 right-0 mt-1 w-56 rounded-lg border shadow-lg p-3 text-left">
+                            <div style={{ color: stat.color }} className="text-[11px] font-semibold mb-1">
+                              {stat.label}
+                            </div>
+                            <div style={{ color: subtext }} className="text-xs leading-snug">
+                              {stat.info}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div style={{ color: subtext }} className="text-[11px] font-medium mb-1">
                       {stat.label}
                     </div>
@@ -1187,79 +1094,80 @@ export default function Simulator() {
               </div>
             </div>
 
-            {/* Right: pump level simulator chart (1/3 width) */}
             <div
               style={{ background: card, borderColor: border }}
-              className="w-1/3 rounded-2xl border-2 overflow-hidden flex flex-col p-3">
-              <div style={{ color: subtext }} className="text-xs font-semibold text-center mb-2">
-                Click the dots to evaluate simulated P-level!
-              </div>
-              <div className="flex-1 min-h-0 relative">
-                <PLevelConfigChart
-                  pumpSequence={pumpSequence}
-                  setPumpSequence={setPumpSequence}
-                  currentLevel={currentLevel}
-                  horizonHours={horizonHours}
-                  isDark={isDark}
-                  card={card}
-                  border={border}
-                  subtext={subtext}
-                  scheme={scheme}
-                  gridColor={gridColor}
-                />
-              </div>
-              <div className="flex-shrink-0 pt-2 mt-1 border-t" style={{ borderColor: border }}>
-                <HorizonSlider
-                  value={horizonHours}
-                  onChange={setHorizonHours}
-                  scheme={scheme}
-                  subtext={subtext}
-                  border={border}
-                  card={card}
-                  muted={muted}
-                  isDark={isDark}
-                />
+              className="w-1/2 rounded-2xl border-2 overflow-hidden flex flex-col p-3">
+              <div className="flex-1 min-h-0 flex">
+                <div className="flex-1 min-w-0 flex flex-col">
+                  <div style={{ color: subtext }} className="text-xs font-semibold text-center mb-2">
+                    Click the dots to evaluate simulated P-level!
+                  </div>
+                  <div className="flex-1 min-h-0 relative">
+                    <PLevelConfigChart
+                      pumpSequence={pumpSequence}
+                      setPumpSequence={setPumpSequence}
+                      currentLevel={currentLevel}
+                      horizonHours={horizonHours}
+                      isDark={isDark}
+                      card={card}
+                      border={border}
+                      subtext={subtext}
+                      scheme={scheme}
+                      gridColor={gridColor}
+                    />
+                  </div>
+                  <div className="flex-shrink-0 mt-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={runSimulation}
+                        disabled={isRunning || !canRunForecast}
+                        style={{
+                          background: canRunForecast && !isRunning ? scheme.primary : muted,
+                          color: canRunForecast && !isRunning ? 'white' : subtext,
+                          borderColor: border,
+                          opacity: isRunning ? 0.85 : 1,
+                        }}
+                        className="px-3 py-1.5 rounded-lg font-semibold text-xs flex items-center gap-1.5 transition-all border">
+                        <motion.div
+                          animate={{ rotate: isRunning ? 360 : 0 }}
+                          transition={{ repeat: isRunning ? Infinity : 0, duration: 0.8, ease: 'linear' }}>
+                          <Play size={12} />
+                        </motion.div>
+                        {isRunning ? 'Simulating…' : 'Run forecast'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => clearStateFor(selectedPatientId)}
+                        style={{ color: subtext, borderColor: border, background: muted }}
+                        className="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 hover:opacity-80 transition-opacity">
+                        <RotateCcw size={12} />
+                        Reset Simulator
+                      </button>
+                    </div>
+                    {forecastError && (
+                      <p style={{ color: CHART_STATUS.warning }} className="text-[11px] leading-snug mt-1.5 text-center">
+                        {forecastError}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div
+                  className="ml-3 pl-3 border-l flex flex-col items-stretch justify-center flex-shrink-0"
+                  style={{ borderColor: border, width: 72 }}>
+                  <HorizonSlider
+                    value={horizonHours}
+                    onChange={setHorizonHours}
+                    scheme={scheme}
+                    subtext={subtext}
+                    border={border}
+                    card={card}
+                    muted={muted}
+                    isDark={isDark}
+                  />
+                </div>
               </div>
             </div>
-          </div>
-
-          <div className="flex items-center gap-3 mt-3">
-            <button
-              type="button"
-              onClick={runSimulation}
-              disabled={isRunning || !canRunForecast}
-              style={{
-                background: canRunForecast && !isRunning ? scheme.primary : muted,
-                color: canRunForecast && !isRunning ? 'white' : subtext,
-                borderColor: border,
-                opacity: isRunning ? 0.85 : 1,
-              }}
-              className="px-5 py-2 rounded-xl font-semibold text-sm flex items-center gap-2 transition-all border">
-              <motion.div
-                animate={{ rotate: isRunning ? 360 : 0 }}
-                transition={{ repeat: isRunning ? Infinity : 0, duration: 0.8, ease: 'linear' }}>
-                <Play size={14} />
-              </motion.div>
-              {isRunning ? 'Simulating…' : 'Run forecast'}
-            </button>
-            {!canRunForecast && (
-              <span style={{ color: subtext }} className="text-[10px] opacity-75">
-                Set all six hours to enable Run forecast.
-              </span>
-            )}
-            {forecastError && (
-              <p style={{ color: CHART_STATUS.warning }} className="text-xs leading-snug">
-                {forecastError}
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={() => clearStateFor(selectedPatientId)}
-              style={{ color: subtext, borderColor: border, background: muted }}
-              className="ml-auto px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 hover:opacity-80 transition-opacity">
-              <RotateCcw size={12} />
-              Reset Simulator
-            </button>
           </div>
         </div>
       </div>
@@ -1267,23 +1175,6 @@ export default function Simulator() {
       <div className="flex-1 overflow-hidden flex">
         {/* Charts area */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{ background: bg }}>
-          {/* Group tabs */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {FEATURE_GROUPS.map((g, i) => (
-              <button
-                key={i}
-                onClick={() => setSelectedGroup(i)}
-                style={{
-                  background: selectedGroup === i ? scheme.primary + '22' : muted,
-                  borderColor: selectedGroup === i ? scheme.primary + '55' : border,
-                  color: selectedGroup === i ? scheme.primary : subtext,
-                }}
-                className="px-3 py-1.5 rounded-lg border text-xs font-medium transition-all">
-                {g.label}
-              </button>
-            ))}
-          </div>
-
           {/* Feature charts */}
           {activeFeatureKeys.map((feature, idx) => {
             const cfg = featureConfigs[feature];
@@ -1321,7 +1212,7 @@ export default function Simulator() {
                       {trend.direction === 'up' ? <TrendingUp size={12} /> :
                        trend.direction === 'down' ? <TrendingDown size={12} /> : <Minus size={12} />}
                       <span className="text-xs font-mono">
-                        {trend.diff > 0 ? '+' : ''}{trend.diff.toFixed(2)} {cfg.unit} over 6h
+                        {trend.diff > 0 ? '+' : ''}{trend.diff.toFixed(2)} {cfg.unit} over {horizonHours}h
                       </span>
                     </div>
                   )}
@@ -1357,26 +1248,11 @@ export default function Simulator() {
         <div className="flex-shrink-0 p-2 pl-0 w-[min(100%,16rem)] min-w-[14rem]">
           <div style={{ background: card, borderColor: border }} className="h-full rounded-2xl border flex flex-col overflow-hidden">
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {/* Current state */}
-              <div>
-                <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold mb-2">Current State</div>
-                <div style={{ background: muted, borderColor: border }} className="rounded-xl border p-3 space-y-1.5">
-                  <div className="flex justify-between items-center">
-                    <span style={{ color: subtext }} className="text-xs">Active Level</span>
-                    <span style={{ color: scheme.primary }} className="font-mono font-semibold text-sm">P{currentLevel}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span style={{ color: subtext }} className="text-xs">Status</span>
-                    <span className="text-xs font-semibold capitalize" style={{ color: CHART_STATUS.normal }}>{patient?.status}</span>
-                  </div>
-                </div>
-              </div>
-
               {/* Trend summary */}
               <AnimatePresence>
                 {hasResult && (
                   <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-                    <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold mb-2">6h Summary</div>
+                    <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold mb-2">{horizonHours}h Summary</div>
                     <div className="space-y-1">
                       {activeFeatureKeys.map(key => {
                         const trend = getTrend(key);

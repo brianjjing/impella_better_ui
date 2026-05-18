@@ -9,8 +9,8 @@ export const featureConfigs = {
   SBP:          { label: 'Systolic BP',               unit: 'mmHg',     normalMin: 90,    normalMax: 130,   warningMin: 80,    warningMax: 145,   color: '#6366F1', description: 'Peak arterial pressure during systole' },
   DBP:          { label: 'Diastolic BP',              unit: 'mmHg',     normalMin: 60,    normalMax: 85,    warningMin: 50,    warningMax: 95,    color: '#14B8A6', description: 'Minimum arterial pressure during diastole' },
   pulsatility:  { label: 'Pulsatility Index',         unit: 'PI',       normalMin: 1.0,   normalMax: 2.5,   warningMin: 0.5,   warningMax: 3.0,   color: '#F97316', description: 'Indicator of native cardiac output — higher means heart is recovering' },
-  tauLV:        { label: 'Relaxation Constant τ_LV',  unit: 'ms',       normalMin: 30,    normalMax: 55,    warningMin: 25,    warningMax: 65,    color: '#A78BFA', description: 'Time constant of isovolumetric LV pressure decay' },
-  eseLV:        { label: 'LV Elastance E_se,LV',      unit: 'mmHg/mL',  normalMin: 0.8,   normalMax: 2.2,   warningMin: 0.5,   warningMax: 2.8,   color: '#FB7185', description: 'End-systolic elastance — index of myocardial contractility' },
+  tauLV:        { label: 'Relaxation Constant',  unit: 'ms',       normalMin: 30,    normalMax: 55,    warningMin: 25,    warningMax: 65,    color: '#A78BFA', description: 'Time constant of isovolumetric LV pressure decay' },
+  eseLV:        { label: 'Elastance Estimation',      unit: 'mmHg/mL',  normalMin: 0.8,   normalMax: 2.2,   warningMin: 0.5,   warningMax: 2.8,   color: '#FB7185', description: 'End-systolic elastance — index of myocardial contractility' },
 };
 
 export const featureKeys = Object.keys(featureConfigs);

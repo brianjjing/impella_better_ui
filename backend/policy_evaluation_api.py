@@ -29,9 +29,31 @@ _SERVER_POLICY_WEIGHTS = Path(
     "/public/gormpo/models/rl/abiomed/realnvp/seed_42_0310_045907-abiomed_mbpo_realnvp/policy_abiomed.pth"
 )
 
+# Raw ranges before stretching finalScore to [0, 10] for the API / UI.
+# SAC: weaning_score_model_gradient average per stable step (see cost_func.py).
+_SAC_STABILITY_RAW_MIN = -1.0
+_SAC_STABILITY_RAW_MAX = 2.0
+# Mock rollout uses a placeholder score unrelated to weaning metric.
+_MOCK_STABILITY_RAW_MIN = 72.0
+_MOCK_STABILITY_RAW_MAX = 92.0
+
+
+def _stability_index_stretched(raw: float, source: Literal["sac", "mock"]) -> float:
+    """Linear map raw stability / weaning metric into [0, 10], clamped."""
+    if source == "mock":
+        span = _MOCK_STABILITY_RAW_MAX - _MOCK_STABILITY_RAW_MIN
+        lo = _MOCK_STABILITY_RAW_MIN
+    else:
+        span = _SAC_STABILITY_RAW_MAX - _SAC_STABILITY_RAW_MIN
+        lo = _SAC_STABILITY_RAW_MIN
+    if span <= 0:
+        return 5.0
+    t = (float(raw) - lo) / span
+    return float(max(0.0, min(10.0, t * 10.0)))
+
+
 # Mirrors impella_better_ui/src/app/data/mockData.js policyDistributions
 _MOCK_DIST: dict[str, List[float]] = {
-    "P001": [0.02, 0.06, 0.18, 0.28, 0.26, 0.14, 0.05, 0.01],
     "P002": [0.01, 0.04, 0.14, 0.24, 0.30, 0.18, 0.07, 0.02],
     "P003": [0.00, 0.01, 0.03, 0.06, 0.14, 0.26, 0.32, 0.18],
     "P004": [0.25, 0.35, 0.22, 0.10, 0.05, 0.02, 0.01, 0.00],
@@ -339,7 +361,7 @@ def get_policy_evaluation(
             label="Mock optimal trajectory (no policy checkpoint)",
             quality=quality,
             totalReward=float(total_reward),
-            finalScore=float(final_score),
+            finalScore=_stability_index_stretched(final_score, "mock"),
             steps=[PolicyStepOut(**s) for s in steps],
         )
         return PolicyEvaluationResponse(
@@ -366,7 +388,7 @@ def get_policy_evaluation(
             label="Mock optimal trajectory (policy load failed)",
             quality=quality,
             totalReward=float(total_reward),
-            finalScore=float(final_score),
+            finalScore=_stability_index_stretched(final_score, "mock"),
             steps=[PolicyStepOut(**s) for s in steps],
         )
         return PolicyEvaluationResponse(
@@ -389,13 +411,16 @@ def get_policy_evaluation(
     obs2, _ = env2.reset(options={"state": state})
     steps, total_reward, final_score = _rollout_sac(policy, env2, obs2, max_steps=6, deterministic=True)
     quality = _quality_from_reward(total_reward)
+    final_stretched = _stability_index_stretched(final_score, "sac")
     logger.info(
-        "[policy_evaluation] source=sac patient_id=%s hour=%s policy_path=%s total_reward=%.6f final_score=%.6f",
+        "[policy_evaluation] source=sac patient_id=%s hour=%s policy_path=%s total_reward=%.6f "
+        "weaning_score_raw=%.6f stability_index_0_10=%.6f",
         pid,
         hour,
         str(policy_path),
         float(total_reward),
         float(final_score),
+        final_stretched,
     )
 
     rollout = RolloutOut(
@@ -403,7 +428,7 @@ def get_policy_evaluation(
         label="SAC policy trajectory",
         quality=quality,
         totalReward=float(total_reward),
-        finalScore=float(final_score),
+        finalScore=final_stretched,
         steps=[PolicyStepOut(**s) for s in steps],
     )
     return PolicyEvaluationResponse(
