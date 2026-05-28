@@ -6,7 +6,7 @@ from typing import Dict, Any, Tuple, Optional
 import random
 
 from backend.model import WorldModel
-from backend.reward_func import compute_reward_smooth, compute_shaped_reward
+from backend.reward_func import compute_reward_smooth, compute_shaped_reward, compute_reward_staircase
 from backend import config
 
 
@@ -18,7 +18,7 @@ class AbiomedRLEnv(gym.Env):
         world_model: WorldModel,
         max_steps: int = 24,
         action_space_type: str = "discrete",
-        reward_type: str = "smooth",
+        reward_type: str = "staircase",
         normalize_rewards: bool = True,
         seed: Optional[int] = None,
         gamma1: Optional[float] = 0.0,
@@ -139,6 +139,12 @@ class AbiomedRLEnv(gym.Env):
             reward += add_rwd
         return reward
     
+    def _compute_reward_staircase(self, next_state: torch.Tensor) -> float:
+        next_state_reshaped = next_state.cpu().unsqueeze(0)
+        next_state_reshaped_unnorm = self.world_model.unnorm_output(next_state_reshaped)
+        raw = float(compute_reward_staircase(next_state_reshaped_unnorm))  # in [-31, 0]
+        return (raw + 31) / 31 * 10
+
     def _get_observation(self, state: torch.Tensor) -> np.ndarray:
         return state.cpu().numpy().reshape(-1).astype(np.float32)
 
@@ -180,7 +186,10 @@ class AbiomedRLEnv(gym.Env):
         
         self.current_state = next_state
         
-        reward = self._compute_reward(next_state)
+        if self.reward_type == "staircase":
+            reward = self._compute_reward_staircase(next_state)
+        else:
+            reward = self._compute_reward(next_state)
         self.episode_rewards.append(reward)
         
         self.current_step += 1
@@ -277,7 +286,7 @@ class AbiomedRLEnvFactory:
         gamma2: float = 0.0,
         gamma3: float = 0.0,
         action_space_type: str = "discrete",
-        reward_type: str = "smooth",
+        reward_type: str = "staircase",
         normalize_rewards: bool = True,
         noise_rate: float = 0.0,
         noise_scale: float = 0.00,
@@ -348,7 +357,7 @@ if __name__ == "__main__":
             model_name="10min_1hr_all_data",
             max_steps=24,
             action_space_type="continuous",
-            reward_type="smooth",
+            reward_type="staircase",
             normalize_rewards=True,
             seed=42
         )

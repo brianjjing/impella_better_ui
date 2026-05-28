@@ -68,6 +68,11 @@ function SimulatorFeatureChart({
   const { datasets, annotations } = useMemo(() => {
     const histData = combinedData.map(r => r[`hist_${feature}`] ?? null);
     const foreData = combinedData.map(r => r[`fore_${feature}`] ?? null);
+    const foreLoData = combinedData.map(r => r[`fore_${feature}_lo`] ?? null);
+    const foreHiData = combinedData.map(r => r[`fore_${feature}_hi`] ?? null);
+    const bandHasData = hasResult && foreLoData.some(v => v != null) && foreHiData.some(v => v != null);
+    // Tinted version of the line color for the band fill (line color toned down).
+    const bandFill = `${plainLineColor}2E`; // ~18% alpha
 
     const histDs = {
       label: 'Historical',
@@ -154,8 +159,45 @@ function SimulatorFeatureChart({
       };
     }
 
+    const bandLoDs = bandHasData
+      ? {
+          label: '_bandLo',
+          isBand: true,
+          data: foreLoData,
+          borderColor: 'transparent',
+          borderWidth: 0,
+          pointRadius: 0,
+          pointHoverRadius: 0,
+          pointHitRadius: 0,
+          tension: 0,
+          spanGaps: true,
+          fill: false,
+          order: 5,
+        }
+      : null;
+    const bandHiDs = bandHasData
+      ? {
+          label: '_bandHi',
+          isBand: true,
+          data: foreHiData,
+          borderColor: 'transparent',
+          borderWidth: 0,
+          backgroundColor: bandFill,
+          pointRadius: 0,
+          pointHoverRadius: 0,
+          pointHitRadius: 0,
+          tension: 0,
+          spanGaps: true,
+          fill: '-1', // fill down to bandLoDs (one index back)
+          order: 5,
+        }
+      : null;
+
+    const baseDatasets = foreDs ? [histDs, foreDs] : [histDs];
+    const datasets = bandHasData ? [bandLoDs, bandHiDs, ...baseDatasets] : baseDatasets;
+
     return {
-      datasets: foreDs ? [histDs, foreDs] : [histDs],
+      datasets,
       annotations: ann,
     };
   }, [combinedData, feature, thr, hasResult, histLength, labels, isDark, subtext, isSeverityColored, plainLineColor]);
@@ -175,7 +217,7 @@ function SimulatorFeatureChart({
         tooltip: {
           mode: 'index',
           intersect: false,
-          filter: item => item.raw != null,
+          filter: item => item.raw != null && !item.dataset?.isBand,
           backgroundColor: card,
           titleColor: subtext,
           bodyColor: subtext,
@@ -593,6 +635,7 @@ function PLevelConfigChart({
           borderColor: scheme.primary,
           borderWidth: 2,
           tension: 0,
+          stepped: 'after',
           spanGaps: false,
           clip: false,
           pointRadius: 4,
@@ -942,9 +985,17 @@ export default function Simulator() {
       featureKeys.forEach(k => {
         if (isFore) {
           row[`fore_${k}`] = step[k];
+          row[`fore_${k}_lo`] = step[`${k}_lo`] ?? null;
+          row[`fore_${k}_hi`] = step[`${k}_hi`] ?? null;
         } else {
           row[`hist_${k}`] = step[k];
-          if (i === hist.length - 1 && hasResult) row[`fore_${k}`] = step[k];
+          if (i === hist.length - 1 && hasResult) {
+            row[`fore_${k}`] = step[k];
+            // Anchor the band to the deterministic value at T0h so it grows
+            // outward from the historical line rather than starting mid-air.
+            row[`fore_${k}_lo`] = step[k];
+            row[`fore_${k}_hi`] = step[k];
+          }
         }
       });
       return row;

@@ -469,13 +469,16 @@ class WorldModel(nn.Module):
         
         return output
     
+    #Using train mode allows us to use dropout (0.1 of the neurons) at every step, 
+    #feeding that hour into the next hour for accumulated uncertainty.
+    #Accumulated uncertainty is needed for a more accurate std for the graph.
     def sample_autoregressive_multiple(self, x, steps, custom_pl=None, batch_data=None, sample_size=1):
-        self.model.train()
+        self.model.train() #Turns on dropout (since thats how the train is configured) - many other options as well for uncertainty, but dropout is best here bc its already present in train mode
         outputs = []
-        for sample in range(sample_size):
-            output = self.sample_autoregressive(x, steps, custom_pl, batch_data)
+        for sample in range(sample_size): #For every stochastic sample
+            output = self.sample_autoregressive(x, steps, custom_pl, batch_data) #All hours
             outputs.append(output)
-        self.model.eval()
+        self.model.eval() #Gets back outta dropout mode
         return outputs
 
     def unnorm_state_col(self, col_idx, state_vectors):

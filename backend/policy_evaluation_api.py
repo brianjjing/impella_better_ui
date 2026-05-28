@@ -18,7 +18,7 @@ from backend.forecast_api import (
     _safe_float,
     get_forecast_world_model,
 )
-from backend.cost_func import weaning_score_model_gradient
+from backend.reward_func import compute_reward_staircase
 from backend.policy_models import ActorProb, Critic, DiagGaussian, MLP
 from backend.rl_env import AbiomedRLEnv
 from backend.sac import SACPolicy
@@ -29,26 +29,18 @@ _SERVER_POLICY_WEIGHTS = Path(
     "/public/gormpo/models/rl/abiomed/realnvp/seed_42_0310_045907-abiomed_mbpo_realnvp/policy_abiomed.pth"
 )
 
-# Raw ranges before stretching rollout finalScore into Pump Level Score [0, 10] for the API / UI.
-# SAC: weaning_score_model_gradient average per stable step (see cost_func.py).
-_SAC_STABILITY_RAW_MIN = -1.0
-_SAC_STABILITY_RAW_MAX = 2.0
-# Mock rollout uses a placeholder score unrelated to weaning metric.
+# Mock rollout uses a placeholder score; stretch into Pump Level Score [0, 10] for the UI.
+# SAC path now uses compute_reward_staircase, which is already on [0, 10].
 _MOCK_STABILITY_RAW_MIN = 72.0
 _MOCK_STABILITY_RAW_MAX = 92.0
 
 
-def _pump_level_score_stretched(raw: float, source: Literal["sac", "mock"]) -> float:
-    """Linear map raw weaning metric into Pump Level Score [0, 10], clamped."""
-    if source == "mock":
-        span = _MOCK_STABILITY_RAW_MAX - _MOCK_STABILITY_RAW_MIN
-        lo = _MOCK_STABILITY_RAW_MIN
-    else:
-        span = _SAC_STABILITY_RAW_MAX - _SAC_STABILITY_RAW_MIN
-        lo = _SAC_STABILITY_RAW_MIN
+def _pump_level_score_stretched_mock(raw: float) -> float:
+    """Linear map mock raw score into Pump Level Score [0, 10], clamped."""
+    span = _MOCK_STABILITY_RAW_MAX - _MOCK_STABILITY_RAW_MIN
     if span <= 0:
         return 5.0
-    t = (float(raw) - lo) / span
+    t = (float(raw) - _MOCK_STABILITY_RAW_MIN) / span
     return float(max(0.0, min(10.0, t * 10.0)))
 
 
@@ -171,17 +163,16 @@ def _rollout_sac(
     steps: List[dict[str, Any]] = []
     total_reward = 0.0
     current_obs = obs
-    rollout_states: List[np.ndarray] = []
-    rollout_actions: List[int] = []
+    staircase_scores: List[float] = []
     for i in range(max_steps):
-        rollout_states.append(np.asarray(current_obs, dtype=np.float32))
         with torch.no_grad():
             a = policy.sample_action(current_obs, deterministic=deterministic)
         next_obs, r, terminated, truncated, info = env.step(a)
         total_reward += float(r)
         p_level = int(info.get("p_level", 2))
-        rollout_actions.append(p_level)
-        row = wm.unnorm_output(env.current_state.unsqueeze(0)).squeeze(0)[-1].detach().cpu().numpy()
+        state_unnorm = wm.unnorm_output(env.current_state.unsqueeze(0))
+        staircase_scores.append(float(compute_reward_staircase(state_unnorm)))
+        row = state_unnorm.squeeze(0)[-1].detach().cpu().numpy()
         state_dict = {FEATURE_KEYS[j]: _safe_float(row[j]) for j in range(len(FEATURE_KEYS))}
         state_dict["label"] = f"Hour {i + 1}"
         steps.append(
@@ -194,16 +185,9 @@ def _rollout_sac(
         current_obs = next_obs
         if terminated or truncated:
             break
-    # Match GORMPO_abiomed evaluation metric: rollout weaning score (gradient definition).
-    weaning_score = 0.0
-    if rollout_states and rollout_actions:
-        ws, _slopes = weaning_score_model_gradient(
-            wm,
-            np.asarray(rollout_states, dtype=np.float32),
-            rollout_actions,
-        )
-        weaning_score = float(ws)
-    return steps, total_reward, weaning_score
+    # Mean staircase reward across rollout states; already on [0, 10].
+    final_score = float(np.mean(staircase_scores)) if staircase_scores else 0.0
+    return steps, total_reward, final_score
 
 
 def _quality_from_reward(total_reward: float) -> str:
@@ -264,7 +248,7 @@ class RolloutOut(BaseModel):
     label: str
     quality: str
     totalReward: float
-    finalScore: float = Field(..., description="Pump Level Score 0–10 (linear stretch of weaning metric).")
+    finalScore: float = Field(..., description="Pump Level Score 0–10 (mean staircase reward across rollout).")
     steps: List[PolicyStepOut]
 
 
@@ -340,7 +324,7 @@ def get_policy_evaluation(
         world_model=wm,
         max_steps=6,
         action_space_type="continuous",
-        reward_type="smooth",
+        reward_type="staircase",
         normalize_rewards=True,
         seed=42,
     )
@@ -361,7 +345,7 @@ def get_policy_evaluation(
             label="Mock optimal trajectory (no policy checkpoint)",
             quality=quality,
             totalReward=float(total_reward),
-            finalScore=_pump_level_score_stretched(final_score, "mock"),
+            finalScore=_pump_level_score_stretched_mock(final_score),
             steps=[PolicyStepOut(**s) for s in steps],
         )
         return PolicyEvaluationResponse(
@@ -388,7 +372,7 @@ def get_policy_evaluation(
             label="Mock optimal trajectory (policy load failed)",
             quality=quality,
             totalReward=float(total_reward),
-            finalScore=_pump_level_score_stretched(final_score, "mock"),
+            finalScore=_pump_level_score_stretched_mock(final_score),
             steps=[PolicyStepOut(**s) for s in steps],
         )
         return PolicyEvaluationResponse(
@@ -404,22 +388,21 @@ def get_policy_evaluation(
         world_model=wm,
         max_steps=6,
         action_space_type="continuous",
-        reward_type="smooth",
+        reward_type="staircase",
         normalize_rewards=True,
         seed=42,
     )
     obs2, _ = env2.reset(options={"state": state})
     steps, total_reward, final_score = _rollout_sac(policy, env2, obs2, max_steps=6, deterministic=True)
     quality = _quality_from_reward(total_reward)
-    final_stretched = _pump_level_score_stretched(final_score, "sac")
+    final_stretched = float(final_score)
     logger.info(
         "[policy_evaluation] source=sac patient_id=%s hour=%s policy_path=%s total_reward=%.6f "
-        "weaning_score_raw=%.6f pump_level_score_0_10=%.6f",
+        "staircase_mean_0_10=%.6f",
         pid,
         hour,
         str(policy_path),
         float(total_reward),
-        float(final_score),
         final_stretched,
     )
 
