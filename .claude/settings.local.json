@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx --no-install vite build)",
+      "Bash(/Users/brian/Documents/Impella/impella_better_ui/node_modules/.bin/vite build *)",
+      "Bash(npx tsc *)",
+      "Bash(wait)",
+      "Bash(npx eslint *)",
+      "Bash(python3 -c \"import json,sys; pkg=json.load\\(sys.stdin\\); print\\(list\\(pkg.get\\('scripts',{}\\).keys\\(\\)\\)\\)\")",
+      "Bash(npm run *)",
+      "Bash(kill 55659)",
+      "Bash(npx vite *)",
+      "Bash(pkill -f \"vite build\")",
+      "Bash(node --check src/app/pages/Simulator.jsx)",
+      "Bash(node --check src/app/pages/PolicyEvaluation.jsx)",
+      "Bash(node --check src/app/context/SimulatorContext.jsx)",
+      "Bash(npx --no -- esbuild --bundle=false --loader=jsx src/app/pages/Simulator.jsx)",
+      "Bash(echo \"Simulator: $?\")",
+      "Bash(npx --no -- esbuild --bundle=false --loader=jsx src/app/pages/PolicyEvaluation.jsx)",
+      "Bash(echo \"PolicyEvaluation: $?\")",
+      "Bash(npx --no -- esbuild --bundle=false --loader=jsx src/app/context/SimulatorContext.jsx)",
+      "Bash(npx --no -- esbuild --bundle=false --loader:.jsx=jsx src/app/pages/Simulator.jsx)",
+      "Bash(npx --no -- esbuild --bundle=false --loader:.jsx=jsx src/app/pages/PolicyEvaluation.jsx)",
+      "Bash(npx --no -- esbuild --bundle=false --loader:.jsx=jsx src/app/context/SimulatorContext.jsx)",
+      "Read(//Users/brian/Documents/Impella/**)",
+      "Read(//Users/brian/Documents/**)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}

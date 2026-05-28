@@ -72,7 +72,7 @@ function SimulatorFeatureChart({
     const foreHiData = combinedData.map(r => r[`fore_${feature}_hi`] ?? null);
     const bandHasData = hasResult && foreLoData.some(v => v != null) && foreHiData.some(v => v != null);
     // Tinted version of the line color for the band fill (line color toned down).
-    const bandFill = `${plainLineColor}2E`; // ~18% alpha
+    const bandFill = `${plainLineColor}B3`; // ~40% alpha — visible but still translucent
 
     const histDs = {
       label: 'Historical',
@@ -154,7 +154,7 @@ function SimulatorFeatureChart({
         type: 'box',
         xMin: histLength - 1,
         xMax: labels.length - 1,
-        backgroundColor: `${FORECAST_COLOR}28`,
+        backgroundColor: `${FORECAST_COLOR}18`,
         borderWidth: 0,
       };
     }
