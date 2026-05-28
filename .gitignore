@@ -2,3 +2,6 @@ node_modules
 impella_better_ui_venv/
 impella_better_ui_venv
 backend/__pycache__
+
+.DS_Store
+**/.DS_Store

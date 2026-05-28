@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 from backend.config import model_configs
 from backend.api_initialization import get_data_pickle_path
 from backend.model import WorldModel
+from backend.evaluate_transformer import get_transformer_confidence
 
 router = APIRouter(tags=["forecast"])
 
@@ -182,28 +183,42 @@ def post_forecast(body: ForecastRequest) -> ForecastResponse:
     # Use the actual observed data window directly as the initial state (no warmup).
     # Iteratively predict each of the 6 user-specified hours from this state.
     state = state.unsqueeze(0).to(wm.device)  # (1, 6, 12)
+    p_levels = [int(p) for p in body.p_levels]
     forecast_rows: List[dict] = []
 
     with torch.no_grad():
-        for hour, p in enumerate(body.p_levels):
-            state = wm.step(state, int(p))  # (1, 6, 12)
-            unnorm = wm.unnorm_output(state.squeeze(0))  # (6, 12)
-            hour_arr = unnorm.cpu().numpy()
-            # Each forecast hour: 5 sub-steps (+10m … +50m) followed by the next
-            # hour boundary (Hour 1 … Hour 6). Conceptually 10 min between dots,
-            # with the last forecast dot landing exactly on Hour 6.
+        # Deterministic central trajectory (unchanged): the "actual" line.
+        det_state = state
+        det_per_hour: List[Any] = []
+        for p in p_levels:
+            det_state = wm.step(det_state, p)  # (1, 6, 12)
+            det_per_hour.append(wm.unnorm_output(det_state.squeeze(0)).cpu().numpy())  # (6, 12)
+
+        # Stochastic ensemble: MC-Dropout autoregressive trajectories → per-step std
+        # for the uncertainty band. Mean is computed but unused; we keep the central
+        # line deterministic so identical requests yield identical lines.
+        _mean_pred, std_pred = get_transformer_confidence(wm, state, p_levels, num_samples=10)
+        # std_pred shape: (steps, forecast_horizon=6, num_features=12)
+
+        for hour in range(len(p_levels)):
+            hour_arr = det_per_hour[hour]
             for step in range(6):
-                if step == 5:
-                    label = f"Hour {hour + 1}"
-                else:
-                    label = f"+{(step + 1) * 10}m"
-                entry = {
+                label = f"Hour {hour + 1}" if step == 5 else f"+{(step + 1) * 10}m"
+                entry: dict = {
                     "t": hour * 6 + step,
                     "label": label,
                     "timestamp": None,
                 }
                 for i, key in enumerate(FEATURE_KEYS):
-                    entry[key] = _safe_float(hour_arr[step, i])
+                    value = _safe_float(hour_arr[step, i])
+                    sigma = _safe_float(std_pred[hour, step, i])
+                    entry[key] = value
+                    if value is not None and sigma is not None:
+                        entry[f"{key}_lo"] = value - sigma
+                        entry[f"{key}_hi"] = value + sigma
+                    else:
+                        entry[f"{key}_lo"] = None
+                        entry[f"{key}_hi"] = None
                 forecast_rows.append(entry)
 
     return ForecastResponse(patient_id=body.patient_id.upper(), forecast=forecast_rows)

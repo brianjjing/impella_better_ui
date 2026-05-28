@@ -52,10 +52,14 @@ function SimulatorFeatureChart({
  const plainLineColor = isDark ? '#6B7280' : '#2A3340';
 
 
- const { datasets, annotations } = useMemo(() => {
-   const histData = combinedData.map(r => r[`hist_${feature}`] ?? null);
-   const foreData = combinedData.map(r => r[`fore_${feature}`] ?? null);
-
+  const { datasets, annotations } = useMemo(() => {
+    const histData = combinedData.map(r => r[`hist_${feature}`] ?? null);
+    const foreData = combinedData.map(r => r[`fore_${feature}`] ?? null);
+    const foreLoData = combinedData.map(r => r[`fore_${feature}_lo`] ?? null);
+    const foreHiData = combinedData.map(r => r[`fore_${feature}_hi`] ?? null);
+    const bandHasData = hasResult && foreLoData.some(v => v != null) && foreHiData.some(v => v != null);
+    // Tinted version of the line color for the band fill (line color toned down).
+    const bandFill = `${plainLineColor}B3`; // ~40% alpha — visible but still translucent
 
    const histDs = {
      label: 'Historical',
@@ -130,100 +134,134 @@ function SimulatorFeatureChart({
        }
      : null;
 
+    const ann = {};
+    if (hasResult && histLength > 0 && labels.length > histLength) {
+      // Box anchors at T0h (the last historical index) so the tinted region
+      // sits flush to the right of the white T0h grid line.
+      ann.forecastBox = {
+        type: 'box',
+        xMin: histLength - 1,
+        xMax: labels.length - 1,
+        backgroundColor: `${FORECAST_COLOR}18`,
+        borderWidth: 0,
+      };
+    }
 
-   const ann = {};
-   if (hasResult && histLength > 0 && labels.length > histLength) {
-     // Box anchors at T0h (the last historical index) so the tinted region
-     // sits flush to the right of the white T0h grid line.
-     ann.forecastBox = {
-       type: 'box',
-       xMin: histLength - 1,
-       xMax: labels.length - 1,
-       backgroundColor: `${FORECAST_COLOR}28`,
-       borderWidth: 0,
-     };
-   }
+    const bandLoDs = bandHasData
+      ? {
+          label: '_bandLo',
+          isBand: true,
+          data: foreLoData,
+          borderColor: 'transparent',
+          borderWidth: 0,
+          pointRadius: 0,
+          pointHoverRadius: 0,
+          pointHitRadius: 0,
+          tension: 0,
+          spanGaps: true,
+          fill: false,
+          order: 5,
+        }
+      : null;
+    const bandHiDs = bandHasData
+      ? {
+          label: '_bandHi',
+          isBand: true,
+          data: foreHiData,
+          borderColor: 'transparent',
+          borderWidth: 0,
+          backgroundColor: bandFill,
+          pointRadius: 0,
+          pointHoverRadius: 0,
+          pointHitRadius: 0,
+          tension: 0,
+          spanGaps: true,
+          fill: '-1', // fill down to bandLoDs (one index back)
+          order: 5,
+        }
+      : null;
 
+    const baseDatasets = foreDs ? [histDs, foreDs] : [histDs];
+    const datasets = bandHasData ? [bandLoDs, bandHiDs, ...baseDatasets] : baseDatasets;
 
-   return {
-     datasets: foreDs ? [histDs, foreDs] : [histDs],
-     annotations: ann,
-   };
- }, [combinedData, feature, thr, hasResult, histLength, labels, isDark, subtext, isSeverityColored, plainLineColor]);
+    return {
+      datasets,
+      annotations: ann,
+    };
+  }, [combinedData, feature, thr, hasResult, histLength, labels, isDark, subtext, isSeverityColored, plainLineColor]);
 
-
- const options = useMemo(
-   () => ({
-     responsive: true,
-     maintainAspectRatio: false,
-     animation: false,
-     interaction: { mode: 'index', intersect: false },
-     plugins: {
-       legend: { display: false },
-       annotation: {
-         common: { drawTime: 'beforeDatasetsDraw' },
-         annotations,
-       },
-       tooltip: {
-         mode: 'index',
-         intersect: false,
-         filter: item => item.raw != null,
-         backgroundColor: card,
-         titleColor: subtext,
-         bodyColor: subtext,
-         borderColor: border,
-         borderWidth: 1,
-         padding: 12,
-         callbacks: {
-           title: items => {
-             if (!items.length) return '';
-             const isFore = items.some(i => i.dataset.isForecast);
-             const lbl = items[0].label;
-             return `${lbl}${isFore ? ' · forecast' : ' · historical'}`;
-           },
-           label: ctx => {
-             const isFore = ctx.dataset.isForecast;
-             const v = ctx.parsed.y;
-             const formatted = typeof v === 'number' ? v.toFixed(2) : String(v);
-             return `${isFore ? 'Forecast' : 'Historical'}: ${formatted}`;
-           },
-           labelColor: ctx => {
-             const v = ctx.parsed.y;
-             if (typeof v !== 'number') {
-               return { borderColor: scheme.primary, backgroundColor: scheme.primary };
-             }
-             const c = continuousSeverityColor(v, thr);
-             return { borderColor: c, backgroundColor: c };
-           },
-         },
-       },
-     },
-     scales: {
-       x: {
-         grid: { display: false },
-         ticks: {
-           color: subtext,
-           font: { size: 10 },
-           maxRotation: 0,
-           autoSkip: false,
-           callback: (_value, index) => {
-             const lbl = labels[index];
-             if (isHourLabel(lbl)) return lbl;
-             if (lbl === '+30m') return '+30 min';
-             return undefined;
-           },
-         },
-         border: { display: false },
-       },
-       y: {
-         grid: { color: gridColor, borderDash: [3, 3] },
-         ticks: { color: subtext, font: { size: 10 } },
-         border: { display: false },
-       },
-     },
-   }),
-   [annotations, card, border, subtext, gridColor, scheme.primary, thr, isDark, labels],
- );
+  const options = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        annotation: {
+          common: { drawTime: 'beforeDatasetsDraw' },
+          annotations,
+        },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          filter: item => item.raw != null && !item.dataset?.isBand,
+          backgroundColor: card,
+          titleColor: subtext,
+          bodyColor: subtext,
+          borderColor: border,
+          borderWidth: 1,
+          padding: 12,
+          callbacks: {
+            title: items => {
+              if (!items.length) return '';
+              const isFore = items.some(i => i.dataset.isForecast);
+              const lbl = items[0].label;
+              return `${lbl}${isFore ? ' · forecast' : ' · historical'}`;
+            },
+            label: ctx => {
+              const isFore = ctx.dataset.isForecast;
+              const v = ctx.parsed.y;
+              const formatted = typeof v === 'number' ? v.toFixed(2) : String(v);
+              return `${isFore ? 'Forecast' : 'Historical'}: ${formatted}`;
+            },
+            labelColor: ctx => {
+              const v = ctx.parsed.y;
+              if (typeof v !== 'number') {
+                return { borderColor: scheme.primary, backgroundColor: scheme.primary };
+              }
+              const c = continuousSeverityColor(v, thr);
+              return { borderColor: c, backgroundColor: c };
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: {
+            color: subtext,
+            font: { size: 10 },
+            maxRotation: 0,
+            autoSkip: false,
+            callback: (_value, index) => {
+              const lbl = labels[index];
+              if (isHourLabel(lbl)) return lbl;
+              if (lbl === '+30m') return '+30 min';
+              return undefined;
+            },
+          },
+          border: { display: false },
+        },
+        y: {
+          grid: { color: gridColor, borderDash: [3, 3] },
+          ticks: { color: subtext, font: { size: 10 } },
+          border: { display: false },
+        },
+      },
+    }),
+    [annotations, card, border, subtext, gridColor, scheme.primary, thr, isDark, labels],
+  );
 
 
  return (
@@ -423,29 +461,29 @@ function PLevelConfigChart({
  }, []);
 
 
- const data = useMemo(
-   () => ({
-     labels,
-     datasets: [
-       {
-         data: yValues,
-         borderColor: scheme.primary,
-         borderWidth: 2,
-         tension: 0,
-         spanGaps: false,
-         clip: false,
-         pointRadius: 4,
-         pointHoverRadius: 5,
-         pointHitRadius: 28,
-         pointBackgroundColor: yValues.map((_, i) => (i === 0 ? scheme.accent : scheme.primary)),
-         pointBorderColor: yValues.map((_, i) => (i === 0 ? scheme.accent : scheme.primary)),
-         pointBorderWidth: 1.25,
-       },
-     ],
-   }),
-   [labels, yValues, scheme.primary, scheme.accent, card, isDark],
- );
-
+  const data = useMemo(
+    () => ({
+      labels,
+      datasets: [
+        {
+          data: yValues,
+          borderColor: scheme.primary,
+          borderWidth: 2,
+          tension: 0,
+          stepped: 'after',
+          spanGaps: false,
+          clip: false,
+          pointRadius: 4,
+          pointHoverRadius: 5,
+          pointHitRadius: 28,
+          pointBackgroundColor: yValues.map((_, i) => (i === 0 ? scheme.accent : scheme.primary)),
+          pointBorderColor: yValues.map((_, i) => (i === 0 ? scheme.accent : scheme.primary)),
+          pointBorderWidth: 1.25,
+        },
+      ],
+    }),
+    [labels, yValues, scheme.primary, scheme.accent, card, isDark],
+  );
 
  const options = useMemo(
    () => ({
@@ -939,31 +977,38 @@ export default function Simulator() {
  }, [lastRunPumpSequence]);
 
 
- const combinedData = useMemo(() => {
-   if (!patient) return [];
-   const hist = patient.timeline;
-   // Forecast contains 6 dots per hour (one per +10 min step), so clip by
-   // horizonHours * 6 dots rather than by hours.
-   const clippedForecast = hasResult
-     ? forecast.slice(0, Math.max(0, Math.min(forecast.length, horizonHours * 6)))
-     : [];
-   const all = hasResult ? [...hist, ...clippedForecast] : hist;
-   const rows = all.map((step, i) => {
-     const isFore = i >= hist.length;
-     const row = { label: step.label, isForecast: isFore };
-     featureKeys.forEach(k => {
-       if (isFore) {
-         row[`fore_${k}`] = step[k];
-       } else {
-         row[`hist_${k}`] = step[k];
-         if (i === hist.length - 1 && hasResult) row[`fore_${k}`] = step[k];
-       }
-     });
-     return row;
-   });
-   return rows;
- }, [patient, forecast, hasResult, horizonHours]);
-
+  const combinedData = useMemo(() => {
+    if (!patient) return [];
+    const hist = patient.timeline;
+    // Forecast contains 6 dots per hour (one per +10 min step), so clip by
+    // horizonHours * 6 dots rather than by hours.
+    const clippedForecast = hasResult
+      ? forecast.slice(0, Math.max(0, Math.min(forecast.length, horizonHours * 6)))
+      : [];
+    const all = hasResult ? [...hist, ...clippedForecast] : hist;
+    const rows = all.map((step, i) => {
+      const isFore = i >= hist.length;
+      const row = { label: step.label, isForecast: isFore };
+      featureKeys.forEach(k => {
+        if (isFore) {
+          row[`fore_${k}`] = step[k];
+          row[`fore_${k}_lo`] = step[`${k}_lo`] ?? null;
+          row[`fore_${k}_hi`] = step[`${k}_hi`] ?? null;
+        } else {
+          row[`hist_${k}`] = step[k];
+          if (i === hist.length - 1 && hasResult) {
+            row[`fore_${k}`] = step[k];
+            // Anchor the band to the deterministic value at T0h so it grows
+            // outward from the historical line rather than starting mid-air.
+            row[`fore_${k}_lo`] = step[k];
+            row[`fore_${k}_hi`] = step[k];
+          }
+        }
+      });
+      return row;
+    });
+    return rows;
+  }, [patient, forecast, hasResult, horizonHours]);
 
  const runSimulation = async () => {
    if (!canRunForecast || !patient) return;
