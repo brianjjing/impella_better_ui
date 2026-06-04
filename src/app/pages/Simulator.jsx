@@ -58,8 +58,9 @@ function SimulatorFeatureChart({
     const foreLoData = combinedData.map(r => r[`fore_${feature}_lo`] ?? null);
     const foreHiData = combinedData.map(r => r[`fore_${feature}_hi`] ?? null);
     const bandHasData = hasResult && foreLoData.some(v => v != null) && foreHiData.some(v => v != null);
-    // Tinted version of the line color for the band fill (line color toned down).
-    const bandFill = `${plainLineColor}B3`; // ~40% alpha — visible but still translucent
+    // Amber band fill matching the forecast accent color (translucent), so the
+    // confidence interval carries the yellow the forecast background used to have.
+    const bandFill = `${FORECAST_COLOR}4D`; // ~30% alpha — visible but still translucent
 
    const histDs = {
      label: 'Historical',
@@ -136,14 +137,16 @@ function SimulatorFeatureChart({
 
     const ann = {};
     if (hasResult && histLength > 0 && labels.length > histLength) {
-      // Box anchors at T0h (the last historical index) so the tinted region
-      // sits flush to the right of the white T0h grid line.
-      ann.forecastBox = {
-        type: 'box',
+      // Dotted boundary at T0h (the last historical index) separating the
+      // current time from the predicted region. The forecast background stays
+      // the normal chart color; the amber now lives in the confidence band.
+      ann.forecastBoundary = {
+        type: 'line',
         xMin: histLength - 1,
-        xMax: labels.length - 1,
-        backgroundColor: `${FORECAST_COLOR}18`,
-        borderWidth: 0,
+        xMax: histLength - 1,
+        borderColor: subtext,
+        borderWidth: 1.25,
+        borderDash: [4, 4],
       };
     }
 
@@ -470,7 +473,7 @@ function PLevelConfigChart({
           borderColor: scheme.primary,
           borderWidth: 2,
           tension: 0,
-          stepped: 'after',
+          stepped: 'before',
           spanGaps: false,
           clip: false,
           pointRadius: 4,
@@ -1064,27 +1067,26 @@ export default function Simulator() {
  const lastHistLabel = patient?.timeline[patient.timeline.length - 1]?.label;
 
 
- // Fetch policy recommendation at Hour 0 so we can show recommended pump
- // change and pump level score on the simulator header.
- const [policyApi, setPolicyApi] = useState(null);
- useEffect(() => {
-   if (!selectedPatientId) {
-     setPolicyApi(null);
-     return;
-   }
-   let cancelled = false;
-   setPolicyApi(null);
-   const params = new URLSearchParams({ patient_id: selectedPatientId, hour: '0' });
-   fetch(`/api/policy_evaluation?${params.toString()}`)
-     .then(async res => {
-       if (!res.ok) throw new Error('policy unavailable');
-       return res.json();
-     })
-     .then(data => { if (!cancelled) setPolicyApi(data); })
-     .catch(() => { if (!cancelled) setPolicyApi(null); })
-   return () => { cancelled = true; };
- }, [selectedPatientId]);
-
+  // Fetch policy recommendation at Hour 0 so we can show recommended pump
+  // change and stability index on the simulator header.
+  const [policyApi, setPolicyApi] = useState(null);
+  useEffect(() => {
+    if (!selectedPatientId) {
+      setPolicyApi(null);
+      return;
+    }
+    let cancelled = false;
+    setPolicyApi(null);
+    const params = new URLSearchParams({ patient_id: selectedPatientId, hour: '0' });
+    fetch(`/api/policy_evaluation?${params.toString()}`)
+      .then(async res => {
+        if (!res.ok) throw new Error('policy unavailable');
+        return res.json();
+      })
+      .then(data => { if (!cancelled) setPolicyApi(data); })
+      .catch(() => { if (!cancelled) setPolicyApi(null); })
+    return () => { cancelled = true; };
+  }, [selectedPatientId]);
 
  const policyDist = policyApi?.distribution?.length === 8 ? policyApi.distribution : null;
  const recommendedLevel = policyDist
@@ -1134,92 +1136,91 @@ export default function Simulator() {
      </div>
 
 
-     {/* Recommendation box (left) + Pump level simulator (right) */}
-     <div
-       style={{ borderColor: border, background: card }}
-       className="flex-shrink-0 border-b overflow-visible">
-       <div className="px-5 pt-4 pb-[7px] overflow-visible">
-         <div className="flex gap-3 items-stretch overflow-visible" style={{ height: HEADER_BOX_HEIGHT }}>
-           {/* Left: recommendation summary (2/3 width) */}
-           <div
-             style={{ background: card, borderColor: border }}
-             className="w-1/2 rounded-2xl border-2 overflow-visible flex flex-col">
-             {/* Top 2/3: recommended pump change */}
-             <div className="flex-[2] p-5 flex flex-col">
-               <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold">
-                 Recommended Pump Change
-               </div>
-               <div className="flex-1 flex items-center justify-center gap-2.5 mt-1">
-                 <div
-                   className="w-16 h-16 rounded-2xl flex items-center justify-center flex-shrink-0"
-                   style={{ background: changeColor + '18' }}>
-                   <ChangeIcon size={40} style={{ color: changeColor }} strokeWidth={2.5} />
-                 </div>
-                 <span style={{ color: changeColor }} className="text-4xl tracking-wide font-bold">
-                   {changeLabel}
-                 </span>
-               </div>
-             </div>
-             <div
-               className="flex-1 grid grid-cols-3 border-t"
-               style={{ borderColor: border }}>
-               {[
-                 {
-                   label: 'Current Pump Level',
-                   value: typeof currentLevel === 'number' ? `P${currentLevel}` : '—',
-                   color: scheme.accent,
-                 },
-                 {
-                   label: 'Recommended Pump Level',
-                   value: recommendedLevel != null ? `P${recommendedLevel}` : '—',
-                   color: scheme.good,
-                   info: "Pump level with highest chance of being deemed best, given patient's state.",
-                 },
-                 {
-                   label: 'Pump Level Score',
-                   value: pumpLevelScore ?? '—',
-                   color: scheme.primary,
-                   info: "0–10 score on the simulated P-level's effectiveness, based on hemodynamic stability.",
-                 },
-               ].map((stat, i) => (
-                 <div
-                   key={stat.label}
-                   className={'relative px-3 py-2 flex flex-col items-center justify-center text-center' + (i < 2 ? ' border-r' : '')}
-                   style={{ borderColor: border }}>
-                   {stat.info && (
-                     <div
-                       ref={openInfo === stat.label ? infoWrapRef : null}
-                       className="absolute top-1 right-1 z-[200]">
-                       <button
-                         type="button"
-                         aria-label={`About ${stat.label}`}
-                         onClick={() => setOpenInfo(openInfo === stat.label ? null : stat.label)}
-                         style={{ color: subtext }}
-                         className="p-0.5 rounded-full hover:opacity-80 transition-opacity">
-                         <Info size={14} />
-                       </button>
-                       {openInfo === stat.label && (
-                         <div
-                           style={{ background: card, borderColor: border, color: text }}
-                           className="absolute z-[201] right-0 mt-1 w-56 rounded-lg border shadow-lg p-3 text-left">
-                           <div style={{ color: subtext }} className="text-xs leading-snug">
-                             {stat.info}
-                           </div>
-                         </div>
-                       )}
-                     </div>
-                   )}
-                   <div style={{ color: subtext }} className="text-[11px] font-medium mb-1">
-                     {stat.label}
-                   </div>
-                   <div style={{ color: stat.color }} className="text-2xl font-bold font-mono">
-                     {stat.value}
-                   </div>
-                 </div>
-               ))}
-             </div>
-           </div>
-
+      {/* Recommendation box (left) + Pump level simulator (right) */}
+      <div
+        style={{ borderColor: border, background: card }}
+        className="flex-shrink-0 border-b overflow-visible">
+        <div className="px-5 pt-4 pb-[7px] overflow-visible">
+          <div className="flex gap-3 items-stretch overflow-visible" style={{ height: HEADER_BOX_HEIGHT }}>
+            {/* Left: recommendation summary (2/3 width) */}
+            <div
+              style={{ background: card, borderColor: border }}
+              className="w-1/2 rounded-2xl border-2 overflow-visible flex flex-col">
+              {/* Top 2/3: recommended pump change */}
+              <div className="flex-[2] p-5 flex flex-col">
+                <div style={{ color: subtext }} className="text-xs uppercase tracking-widest font-semibold">
+                  Recommended Pump Change
+                </div>
+                <div className="flex-1 flex items-center justify-center gap-2.5 mt-1">
+                  <div
+                    className="w-16 h-16 rounded-2xl flex items-center justify-center flex-shrink-0"
+                    style={{ background: changeColor + '18' }}>
+                    <ChangeIcon size={40} style={{ color: changeColor }} strokeWidth={2.5} />
+                  </div>
+                  <span style={{ color: changeColor }} className="text-4xl tracking-wide font-bold">
+                    {changeLabel}
+                  </span>
+                </div>
+              </div>
+              <div
+                className="flex-1 grid grid-cols-3 border-t"
+                style={{ borderColor: border }}>
+                {[
+                  {
+                    label: 'Current Pump Level',
+                    value: typeof currentLevel === 'number' ? `P${currentLevel}` : '—',
+                    color: scheme.accent,
+                  },
+                  {
+                    label: 'Recommended Pump Level',
+                    value: recommendedLevel != null ? `P${recommendedLevel}` : '—',
+                    color: scheme.good,
+                    info: "Pump level with highest chance of being deemed best, given patient's state.",
+                  },
+                  {
+                    label: 'Stability Index',
+                    value: pumpLevelScore ?? '—',
+                    color: scheme.primary,
+                    info: "0–10 score on the simulated P-level's effectiveness, based on hemodynamic stability.",
+                  },
+                ].map((stat, i) => (
+                  <div
+                    key={stat.label}
+                    className={'relative px-3 py-2 flex flex-col items-center justify-center text-center' + (i < 2 ? ' border-r' : '')}
+                    style={{ borderColor: border }}>
+                    {stat.info && (
+                      <div
+                        ref={openInfo === stat.label ? infoWrapRef : null}
+                        className="absolute top-1 right-1 z-[200]">
+                        <button
+                          type="button"
+                          aria-label={`About ${stat.label}`}
+                          onClick={() => setOpenInfo(openInfo === stat.label ? null : stat.label)}
+                          style={{ color: subtext }}
+                          className="p-0.5 rounded-full hover:opacity-80 transition-opacity">
+                          <Info size={14} />
+                        </button>
+                        {openInfo === stat.label && (
+                          <div
+                            style={{ background: card, borderColor: border, color: text }}
+                            className="absolute z-[201] right-0 mt-1 w-56 rounded-lg border shadow-lg p-3 text-left">
+                            <div style={{ color: subtext }} className="text-xs leading-snug">
+                              {stat.info}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div style={{ color: subtext }} className="text-[11px] font-medium mb-1">
+                      {stat.label}
+                    </div>
+                    <div style={{ color: stat.color }} className="text-2xl font-bold font-mono">
+                      {stat.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
 
            <div
              style={{ background: card, borderColor: border }}

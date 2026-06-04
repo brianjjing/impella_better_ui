@@ -25,7 +25,10 @@
       "Read(//Users/brian/Documents/Impella/**)",
       "Read(//Users/brian/Documents/**)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(cd *)",
+      "Bash(python3 -m py_compile backend_copy/*.py)",
+      "Bash(SMARTWEAN_DEVICE=cpu impella_better_ui_venv/bin/python -m backend_copy._validate_speedups)"
     ]
   }
 }
