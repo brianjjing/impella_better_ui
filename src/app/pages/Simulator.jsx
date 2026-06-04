@@ -71,8 +71,9 @@ function SimulatorFeatureChart({
     const foreLoData = combinedData.map(r => r[`fore_${feature}_lo`] ?? null);
     const foreHiData = combinedData.map(r => r[`fore_${feature}_hi`] ?? null);
     const bandHasData = hasResult && foreLoData.some(v => v != null) && foreHiData.some(v => v != null);
-    // Tinted version of the line color for the band fill (line color toned down).
-    const bandFill = `${plainLineColor}B3`; // ~40% alpha — visible but still translucent
+    // Amber band fill matching the forecast accent color (translucent), so the
+    // confidence interval carries the yellow the forecast background used to have.
+    const bandFill = `${FORECAST_COLOR}4D`; // ~30% alpha — visible but still translucent
 
     const histDs = {
       label: 'Historical',
@@ -148,14 +149,16 @@ function SimulatorFeatureChart({
 
     const ann = {};
     if (hasResult && histLength > 0 && labels.length > histLength) {
-      // Box anchors at T0h (the last historical index) so the tinted region
-      // sits flush to the right of the white T0h grid line.
-      ann.forecastBox = {
-        type: 'box',
+      // Dotted boundary at T0h (the last historical index) separating the
+      // current time from the predicted region. The forecast background stays
+      // the normal chart color; the amber now lives in the confidence band.
+      ann.forecastBoundary = {
+        type: 'line',
         xMin: histLength - 1,
-        xMax: labels.length - 1,
-        backgroundColor: `${FORECAST_COLOR}18`,
-        borderWidth: 0,
+        xMax: histLength - 1,
+        borderColor: subtext,
+        borderWidth: 1.25,
+        borderDash: [4, 4],
       };
     }
 
@@ -635,7 +638,7 @@ function PLevelConfigChart({
           borderColor: scheme.primary,
           borderWidth: 2,
           tension: 0,
-          stepped: 'after',
+          stepped: 'before',
           spanGaps: false,
           clip: false,
           pointRadius: 4,
@@ -1055,7 +1058,7 @@ export default function Simulator() {
   const lastHistLabel = patient?.timeline[patient.timeline.length - 1]?.label;
 
   // Fetch policy recommendation at Hour 0 so we can show recommended pump
-  // change and pump level score on the simulator header.
+  // change and stability index on the simulator header.
   const [policyApi, setPolicyApi] = useState(null);
   useEffect(() => {
     if (!selectedPatientId) {
@@ -1161,7 +1164,7 @@ export default function Simulator() {
                     info: "Pump level with highest chance of being deemed best, given patient's state.",
                   },
                   {
-                    label: 'Pump Level Score',
+                    label: 'Stability Index',
                     value: pumpLevelScore ?? '—',
                     color: scheme.primary,
                     info: "0–10 score on the simulated P-level's effectiveness, based on hemodynamic stability.",

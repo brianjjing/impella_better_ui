@@ -407,7 +407,7 @@ export default function PolicyEvaluation() {
           </p>
         )}
 
-        {/* Key Metrics Row — same order as Simulator: baseline (current vs simulated), recommended, pump level score */}
+        {/* Key Metrics Row — same order as Simulator: baseline (current vs simulated), recommended, stability index */}
         <div className="grid grid-cols-3 gap-3">
           {[
             {
@@ -431,7 +431,7 @@ export default function PolicyEvaluation() {
               bg: scheme.good + '12',
             },
             {
-              label: 'Pump Level Score',
+              label: 'Stability Index',
               color: scheme.primary,
               value: pumpLevelScore ?? '—',
               desc: hasPolicyData
