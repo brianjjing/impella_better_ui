@@ -1,9 +1,11 @@
+import json
 import math
 import logging
 
 import torch
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from backend_copy.forecast_api import get_forecast_world_model, FEATURE_KEYS
 
@@ -12,7 +14,11 @@ logger = logging.getLogger(__name__)
 
 # Memoized patients payload. The response is fully deterministic (derived from
 # the data pickle, no model forward pass), so we build it once and reuse it.
+# _patients_payload        — full list (with timeline), used by the detail endpoint
+# _patients_list_bytes     — pre-serialized JSON of the list WITHOUT timelines,
+#                            returned directly as bytes to skip per-request serialization
 _patients_payload = None
+_patients_list_bytes: bytes | None = None
 
 
 def _safe_float(v):
@@ -65,13 +71,13 @@ def _build_all_timelines(wm):
 
 
 def get_patients_payload():
-    """Build (once) and return the full patients list. Memoized — deterministic."""
-    global _patients_payload
+    """Build (once) and return the full patients list including timelines. Memoized."""
+    global _patients_payload, _patients_list_bytes
     if _patients_payload is not None:
         return _patients_payload
 
     wm = get_forecast_world_model()
-    logger.info("[patients] world model loaded; building payload")
+    logger.info("[patients] building payload for the first time …")
 
     timelines = _build_all_timelines(wm)
     N = len(timelines)
@@ -100,15 +106,48 @@ def get_patients_payload():
         })
 
     _patients_payload = patients
-    logger.info("[patients] payload built count=%s (memoized)", N)
+
+    # Pre-serialize the list WITHOUT timelines so /api/patients never re-encodes.
+    slim = [{k: v for k, v in p.items() if k != "timeline"} for p in patients]
+    _patients_list_bytes = json.dumps(slim).encode()
+
+    logger.info(
+        "[patients] payload built and cached count=%s  list_bytes=%.1f KB",
+        N,
+        len(_patients_list_bytes) / 1024,
+    )
     return _patients_payload
 
 
 @router.get("/patients")
 def get_patients():
-    logger.info("[patients] request started")
+    """Returns all patients WITHOUT timeline data (~2 KB/patient instead of ~29 MB total).
+    Timeline is fetched separately via GET /api/patients/{patient_id}/timeline.
+    """
     try:
-        return get_patients_payload()
+        get_patients_payload()  # ensure built
+        if _patients_list_bytes is None:
+            raise RuntimeError("patients payload not yet built")
+        logger.info("[patients] list served from pre-serialized cache (%d bytes)", len(_patients_list_bytes))
+        return Response(content=_patients_list_bytes, media_type="application/json")
     except Exception:
-        logger.exception("[patients] request failed with unhandled error")
+        logger.exception("[patients] list request failed")
         raise
+
+
+@router.get("/patients/{patient_id}/timeline")
+def get_patient_timeline(patient_id: str):
+    """Returns the 6-step historical timeline for a single patient (fetched on demand)."""
+    try:
+        payload = get_patients_payload()
+    except Exception:
+        logger.exception("[patients] timeline request failed")
+        raise
+
+    patient_id = patient_id.strip().upper()
+    patient = next((p for p in payload if p["id"] == patient_id), None)
+    if patient is None:
+        raise HTTPException(status_code=404, detail=f"Patient {patient_id} not found")
+
+    logger.info("[patients] timeline served for %s", patient_id)
+    return patient["timeline"]

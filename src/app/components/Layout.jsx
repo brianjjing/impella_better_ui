@@ -58,15 +58,24 @@ export default function Layout() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const searchRef = useRef(null);
 
-  // Single source of truth: fetch patients from API (same TimeSeriesDataset as backend)
+  const apiBase = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? '' : 'http://localhost:8000');
+
+  // Debounce the search query so the suggestions memo doesn't fire on every keystroke
+  // when there are thousands of patients.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(searchQuery), 150);
+    return () => clearTimeout(id);
+  }, [searchQuery]);
+
+  // Fetch the patient list (no timeline data — keeps the response small).
   useEffect(() => {
     let cancelled = false;
     async function fetchPatients() {
       try {
         setPatientsLoading(true);
         setPatientsError(null);
-        const base = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? '' : 'http://localhost:8000');
-        const res = await fetch(`${base}/api/patients`);
+        const res = await fetch(`${apiBase}/api/patients`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!cancelled) {
@@ -90,6 +99,26 @@ export default function Layout() {
     return () => { cancelled = true; };
   }, []);
 
+  // Fetch timeline on demand whenever the selected patient changes.
+  // Merges timeline into the patient object in-place so all consumers see it.
+  useEffect(() => {
+    if (!selectedPatientId) return;
+    const patient = patients.find(p => p.id === selectedPatientId);
+    if (!patient || patient.timeline) return; // already loaded
+    let cancelled = false;
+    fetch(`${apiBase}/api/patients/${selectedPatientId}/timeline`)
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(timeline => {
+        if (!cancelled) {
+          setPatients(prev => prev.map(p =>
+            p.id === selectedPatientId ? { ...p, timeline } : p
+          ));
+        }
+      })
+      .catch(e => console.error('[timeline fetch]', e));
+    return () => { cancelled = true; };
+  }, [selectedPatientId, patients]);
+
   const selectedPatient = patients.find(p => p.id === selectedPatientId);
   const s       = getSurfaces(isDark);
   const bg      = s.bg;
@@ -101,15 +130,15 @@ export default function Layout() {
   const muted   = s.muted;
 
   const suggestions = useMemo(() => {
-    if (!searchQuery.trim()) return [];
+    if (!debouncedSearch.trim()) return [];
     return patients
-      .map(p => ({ ...p, _score: scoreMatch(p, searchQuery) }))
+      .map(p => ({ ...p, _score: scoreMatch(p, debouncedSearch) }))
       .filter(p => p._score >= 0)
       .sort((a, b) => {
         if (b._score !== a._score) return b._score - a._score;
         return (severityOrder[a.status] ?? 5) - (severityOrder[b.status] ?? 5);
       });
-  }, [patients, searchQuery]);
+  }, [patients, debouncedSearch]);
 
   // Close suggestions on outside click
   useEffect(() => {

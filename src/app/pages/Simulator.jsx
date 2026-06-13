@@ -17,8 +17,8 @@ const FEATURE_GROUPS = [
 ];
 
 
-/** Vivid amber for forecast series (high contrast on dark/light charts) */
-const FORECAST_COLOR = '#FACC15';
+// Forecast color is sourced from scheme.forecast (set in ThemeContext colorSchemes).
+// No module-level constant — use scheme.forecast wherever needed inside components.
 
 
 // Labels that mark an "hour boundary" on the forecast chart (gets a larger dot,
@@ -60,7 +60,7 @@ function SimulatorFeatureChart({
     const bandHasData = hasResult && foreLoData.some(v => v != null) && foreHiData.some(v => v != null);
     // Amber band fill matching the forecast accent color (translucent), so the
     // confidence interval carries the yellow the forecast background used to have.
-    const bandFill = `${FORECAST_COLOR}4D`; // ~30% alpha — visible but still translucent
+    const bandFill = `${scheme.forecast}4D`; // ~30% alpha — visible but still translucent
 
    const histDs = {
      label: 'Historical',
@@ -503,7 +503,7 @@ function PLevelConfigChart({
              type: 'box',
              xMin: 1,
              xMax: horizon,
-             backgroundColor: '#FACC1518',
+             backgroundColor: `${scheme.forecast}18`,
              borderWidth: 0,
            },
            configBoundary: {
@@ -981,7 +981,7 @@ export default function Simulator() {
 
 
   const combinedData = useMemo(() => {
-    if (!patient) return [];
+    if (!patient || !patient.timeline) return [];
     const hist = patient.timeline;
     // Forecast contains 6 dots per hour (one per +10 min step), so clip by
     // horizonHours * 6 dots rather than by hours.
@@ -1051,7 +1051,7 @@ export default function Simulator() {
 
 
  const getTrend = feature => {
-   if (!hasResult || forecast.length === 0 || !patient) return null;
+   if (!hasResult || forecast.length === 0 || !patient || !patient.timeline) return null;
    // 6 forecast dots per hour; trend compares the current state to the
    // forecasted state at the end of the selected horizon.
    const lastIdx = Math.max(0, Math.min(forecast.length, horizonHours * 6) - 1);
@@ -1064,7 +1064,7 @@ export default function Simulator() {
 
 
  const activeFeatureKeys = FEATURE_GROUPS[selectedGroup].keys;
- const lastHistLabel = patient?.timeline[patient.timeline.length - 1]?.label;
+ const lastHistLabel = patient?.timeline?.[patient.timeline.length - 1]?.label;
 
 
   // Fetch policy recommendation at Hour 0 so we can show recommended pump
@@ -1442,10 +1442,10 @@ export default function Simulator() {
                      <div className="flex items-start gap-1.5 text-xs">
                        <div
                          className="w-5 h-1 mt-1 rounded flex-shrink-0"
-                         style={{ background: FORECAST_COLOR }}
+                         style={{ background: scheme.forecast }}
                          aria-hidden
                        />
-                       <span style={{ color: FORECAST_COLOR }} className="font-medium leading-snug break-words">
+                       <span style={{ color: scheme.forecast }} className="font-medium leading-snug break-words">
                          Forecast: {forecastPumpLegend}
                        </span>
                      </div>

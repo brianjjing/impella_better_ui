@@ -138,6 +138,12 @@ export default function MainMenu() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const searchRef = useRef(null);
 
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(searchQuery), 150);
+    return () => clearTimeout(id);
+  }, [searchQuery]);
+
   const [metricDetailKey, setMetricDetailKey] = useState(null);
   const [hoveredMetricKey, setHoveredMetricKey] = useState(null);
   const [metricPopoverPos, setMetricPopoverPos] = useState({ top: 0, left: 0, placement: 'below' });
@@ -159,15 +165,15 @@ export default function MainMenu() {
     : scheme.primary;
 
   const suggestions = useMemo(() => {
-    if (!searchQuery.trim()) return [];
+    if (!debouncedSearch.trim()) return [];
     return patients
-      .map(p => ({ ...p, _score: scoreMatch(p, searchQuery) }))
+      .map(p => ({ ...p, _score: scoreMatch(p, debouncedSearch) }))
       .filter(p => p._score >= 0)
       .sort((a, b) => {
         if (b._score !== a._score) return b._score - a._score;
         return (severityOrder[a.status] ?? 5) - (severityOrder[b.status] ?? 5);
       });
-  }, [searchQuery]);
+  }, [patients, debouncedSearch]);
 
   // Close suggestions on outside click
   useEffect(() => {

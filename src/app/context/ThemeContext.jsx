@@ -46,6 +46,7 @@ export const colorSchemes = [
     id: 'sapphire', name: 'Sapphire', description: 'Deep blue clinical theme',
     primary: '#1D4ED8', primaryLight: '#DBEAFE', accent: '#06B6D4',
     good: '#0D9488', warning: '#D97706', critical: '#DC2626',
+    forecast: '#FACC15',
     chart: ['#3B82F6', '#06B6D4', '#8B5CF6', '#F59E0B', '#10B981', '#F97316'],
     swatchColors: ['#1D4ED8', '#06B6D4', '#DBEAFE'],
   },
@@ -53,6 +54,7 @@ export const colorSchemes = [
     id: 'ocean', name: 'Ocean', description: 'Teal & indigo medical',
     primary: '#0E7490', primaryLight: '#CFFAFE', accent: '#4F46E5',
     good: '#059669', warning: '#D97706', critical: '#DB2777',
+    forecast: '#FACC15',
     chart: ['#0EA5E9', '#4F46E5', '#14B8A6', '#F59E0B', '#A78BFA', '#FB7185'],
     swatchColors: ['#0E7490', '#4F46E5', '#CFFAFE'],
   },
@@ -60,6 +62,7 @@ export const colorSchemes = [
     id: 'ember', name: 'Ember', description: 'Warm amber & teal',
     primary: '#B45309', primaryLight: '#FEF3C7', accent: '#0D9488',
     good: '#059669', warning: '#D97706', critical: '#9333EA',
+    forecast: '#FACC15',
     chart: ['#F59E0B', '#0D9488', '#F97316', '#6366F1', '#10B981', '#EC4899'],
     swatchColors: ['#B45309', '#0D9488', '#FEF3C7'],
   },
@@ -67,6 +70,7 @@ export const colorSchemes = [
     id: 'slate', name: 'Slate', description: 'Cool neutral & indigo',
     primary: '#475569', primaryLight: '#F1F5F9', accent: '#6366F1',
     good: '#0891B2', warning: '#D97706', critical: '#DC2626',
+    forecast: '#FACC15',
     chart: ['#6366F1', '#0891B2', '#8B5CF6', '#F59E0B', '#14B8A6', '#FB923C'],
     swatchColors: ['#475569', '#6366F1', '#F1F5F9'],
   },
@@ -74,6 +78,7 @@ export const colorSchemes = [
     id: 'violet', name: 'Violet', description: 'Purple & teal fusion',
     primary: '#7C3AED', primaryLight: '#EDE9FE', accent: '#06B6D4',
     good: '#0D9488', warning: '#F59E0B', critical: '#F43F5E',
+    forecast: '#FACC15',
     chart: ['#8B5CF6', '#06B6D4', '#A78BFA', '#F59E0B', '#10B981', '#FB7185'],
     swatchColors: ['#7C3AED', '#06B6D4', '#EDE9FE'],
   },
@@ -100,6 +105,41 @@ export function ThemeProvider({ children }) {
     if (isDark) document.documentElement.classList.add('dark');
     else document.documentElement.classList.remove('dark');
   }, [isDark]);
+
+  // Keep CSS custom properties in sync with the JS theme so shadcn/ui components
+  // and Tailwind utility classes always match the custom inline-style components.
+  // This is the single write point — theme.css holds the initial static values,
+  // but this effect is authoritative at runtime.
+  useEffect(() => {
+    if (!scheme) return;
+    const r = document.documentElement;
+    const s = getSurfaces(isDark);
+
+    // Surface tokens
+    r.style.setProperty('--background',         s.bg);
+    r.style.setProperty('--foreground',         s.text);
+    r.style.setProperty('--card',               s.card);
+    r.style.setProperty('--card-foreground',    s.text);
+    r.style.setProperty('--popover',            s.card);
+    r.style.setProperty('--popover-foreground', s.text);
+    r.style.setProperty('--muted',              s.muted);
+    r.style.setProperty('--muted-foreground',   s.subtext);
+    r.style.setProperty('--border',             s.border);
+    r.style.setProperty('--input-background',   s.inputBg);
+    r.style.setProperty('--sidebar',            s.sidebar);
+    r.style.setProperty('--sidebar-foreground', s.text);
+    r.style.setProperty('--sidebar-border',     s.border);
+
+    // Scheme tokens
+    r.style.setProperty('--primary',              scheme.primary);
+    r.style.setProperty('--primary-foreground',   '#ffffff');
+    r.style.setProperty('--accent',               scheme.accent);
+    r.style.setProperty('--accent-foreground',    '#ffffff');
+    r.style.setProperty('--destructive',          scheme.critical);
+    r.style.setProperty('--ring',                 scheme.primary);
+    r.style.setProperty('--sidebar-primary',      scheme.primary);
+    r.style.setProperty('--sidebar-primary-foreground', '#ffffff');
+  }, [isDark, scheme]);
 
   const setThreshold = (feature, config) => {
     setThresholds(prev => ({ ...prev, [feature]: config }));

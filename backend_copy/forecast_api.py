@@ -1,6 +1,7 @@
 """POST /api/forecast — world-model rollout for the pump simulator."""
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
@@ -75,12 +76,38 @@ def _world_model_weight_candidates() -> list[Path]:
 
 
 def _resolve_data_pickle_path() -> str:
+    """Return the best available dataset path, preferring .npz over .pkl."""
+    def _prefer_npz(p: Path) -> str:
+        """If a .npz sibling exists next to a .pkl, return it instead."""
+        if str(p).endswith(".pkl"):
+            npz = p.with_suffix(".npz")
+            if npz.is_file():
+                return str(npz)
+        return str(p)
+
     env = os.environ.get("SMARTWEAN_DATA_PICKLE")
-    if env and Path(env).is_file():
-        return env
+    if env:
+        env_path = Path(env)
+        if env_path.is_file():
+            return _prefer_npz(env_path)
+        # Also try the .npz directly if caller passed a .pkl that was converted
+        env_npz = env_path.with_suffix(".npz")
+        if env_npz.is_file():
+            return str(env_npz)
+
+    # Check backend_copy dir first for a local .npz (written by convert_pkl_to_npz.py)
+    local_npz = _BACKEND_DIR / "10min_1hr_all_data.npz"
+    if local_npz.is_file():
+        return str(local_npz)
+
+    # Check server path — prefer .npz next to the .pkl
+    server_npz = _SERVER_DATA_PICKLE.with_suffix(".npz")
+    if server_npz.is_file():
+        return str(server_npz)
     if _SERVER_DATA_PICKLE.is_file():
         return str(_SERVER_DATA_PICKLE)
-    return get_data_pickle_path()
+
+    return _prefer_npz(Path(get_data_pickle_path()))
 
 
 def _resolve_world_model_weights() -> Path:
@@ -101,6 +128,9 @@ def _resolve_world_model_weights() -> Path:
     )
 
 
+_logger = logging.getLogger(__name__)
+
+
 def get_forecast_world_model() -> WorldModel:
     """Lazy singleton: trained 10min_1hr model with forecast_horizon=6 (matches checkpoint)."""
     global _world_model
@@ -116,9 +146,14 @@ def get_forecast_world_model() -> WorldModel:
     kwargs["device"] = torch.device(device_s)
 
     wm = WorldModel(**kwargs)
-    path = _resolve_world_model_weights()
-    wm.load_model(str(path))
-    wm.load_data(_resolve_data_pickle_path())
+    weights_path = _resolve_world_model_weights()
+    data_path = _resolve_data_pickle_path()
+    fmt = "npz" if data_path.endswith(".npz") else "pkl"
+    _logger.info("[world_model] loading weights from %s", weights_path)
+    _logger.info("[world_model] loading data from %s  (format=%s)", data_path, fmt)
+    wm.load_model(str(weights_path))
+    wm.load_data(data_path)
+    _logger.info("[world_model] ready — device=%s  data_format=%s", device_s, fmt)
     _world_model = wm
     return wm
 

@@ -1,4 +1,7 @@
 import pickle
+import threading
+from contextlib import contextmanager
+
 import numpy as np
 import pandas as pd
 import torch
@@ -10,6 +13,30 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 import copy
+
+
+@contextmanager
+def _dropout_train_mode(module: nn.Module):
+    """Temporarily enable dropout on a module without touching global train/eval mode.
+
+    Thread-safe alternative to model.train() / model.eval(): instead of flipping
+    the entire module tree (which races with concurrent eval-mode forward passes),
+    we only set the training flag on Dropout layers and restore it afterward.
+
+    Usage:
+        with _dropout_train_mode(self.model):
+            output = self.model(src, pl)
+    """
+    dropout_types = (nn.Dropout, nn.Dropout2d, nn.Dropout3d, nn.AlphaDropout)
+    dropout_layers = [m for m in module.modules() if isinstance(m, dropout_types)]
+    prev = [m.training for m in dropout_layers]
+    try:
+        for m in dropout_layers:
+            m.training = True
+        yield
+    finally:
+        for m, s in zip(dropout_layers, prev):
+            m.training = s
 
 class TimeSeriesDataset(Dataset):
     def __init__(self, data_all, input_horizon=10, output_horizon=11):
@@ -97,6 +124,7 @@ class TimeSeriesTransformer(nn.Module):
         super(TimeSeriesTransformer, self).__init__()
 
         self.device = torch.device(device)
+        self._sample_lock = threading.Lock()
         print("Using device:", self.device)
 
         self.dim_model = dim_model
@@ -147,12 +175,8 @@ class TimeSeriesTransformer(nn.Module):
         return output
 
     def sample_multiple(self, src, pl, num_samples=10):
-        self.train()  # Enable dropout during inference
-        samples = []
-        for _ in range(num_samples):
-            output = self.forward(src, pl)
-            samples.append(output)
-        self.eval() 
+        with self._sample_lock, _dropout_train_mode(self), torch.no_grad():
+            samples = [self.forward(src, pl) for _ in range(num_samples)]
         return torch.stack(samples)
 
 
@@ -202,7 +226,14 @@ class WorldModel(nn.Module):
         self.forecast_horizon = forecast_horizon
         self.device = torch.device(device)
         self.columns = columns if columns is not None else [i for i in range(0, 13) if i != 11]
-        
+
+        # Per-instance lock that serialises the stochastic (MC-dropout) sampling
+        # calls within a single worker process.  With multiple uvicorn workers each
+        # worker has its own WorldModel instance, so this only queues requests that
+        # land on the SAME worker — keeping individual-worker throughput sensible
+        # while preventing the train/eval mode race between concurrent threads.
+        self._sample_lock = threading.Lock()
+
         print('time series transformer device', device)
         # --- Model ---
         model = model_factory(
@@ -233,38 +264,71 @@ class WorldModel(nn.Module):
     def forward(self, src, pl):
         return self.model(src, pl)
 
-    def load_data(self, path): 
-        
-        with open(path, "rb") as f:
-            data = pickle.load(f)
-        mean = data["mean"]
-        std = data["std"]
-        self.mean, self.std = mean, std
+    def load_data(self, path):
+        """Load train/val/test splits from a .npz or .pkl file.
+
+        .npz is preferred: numpy loads raw float32 arrays ~5-10x faster than
+        pickle because it avoids reconstructing torch.Tensor objects.  If the
+        provided path ends in .pkl *and* a sibling .npz file exists, the .npz
+        is used automatically.
+
+        To produce the .npz from an existing .pkl run:
+            python backend_copy/convert_pkl_to_npz.py
+        """
+        import time
+        path = str(path)
+
+        # Silently upgrade .pkl → .npz when a converted file exists next to it.
+        if path.endswith(".pkl"):
+            npz_path = path[:-4] + ".npz"
+            import os
+            if os.path.isfile(npz_path):
+                path = npz_path
+
+        t0 = time.perf_counter()
+        if path.endswith(".npz"):
+            raw = np.load(path)
+            mean = raw["mean"].astype(np.float64)
+            std  = raw["std"].astype(np.float64)
+            train_arr = raw["train"].astype(np.float64)
+            val_arr   = raw["val"].astype(np.float64)
+            test_arr  = raw["test"].astype(np.float64)
+        else:
+            with open(path, "rb") as f:
+                data = pickle.load(f)
+            mean      = np.asarray(data["mean"],  dtype=np.float64)
+            std       = np.asarray(data["std"],   dtype=np.float64)
+            train_arr = np.asarray(data["train"], dtype=np.float64)
+            val_arr   = np.asarray(data["val"],   dtype=np.float64)
+            test_arr  = np.asarray(data["test"],  dtype=np.float64)
+        t1 = time.perf_counter()
+
+        self.mean = mean
+        self.std  = std
 
         self.data_train = TimeSeriesDataset(
-            ((data["train"] - mean) / std)[:, :, self.columns],
-            input_horizon = self.forecast_horizon,
+            ((train_arr - mean) / std)[:, :, self.columns],
+            input_horizon=self.forecast_horizon,
             output_horizon=self.forecast_horizon,
         )
         self.data_val = TimeSeriesDataset(
-            ((data["val"] - mean) / std)[:, :, self.columns],
+            ((val_arr - mean) / std)[:, :, self.columns],
             input_horizon=self.forecast_horizon,
             output_horizon=self.forecast_horizon,
         )
         self.data_test = TimeSeriesDataset(
-            ((data["test"] - mean) / std)[:, :, self.columns],
+            ((test_arr - mean) / std)[:, :, self.columns],
             input_horizon=self.forecast_horizon,
             output_horizon=self.forecast_horizon,
         )
 
+        fmt = "npz" if path.endswith(".npz") else "pkl"
         print(
-            "loaded datasets with length \n train: ",
-            len(self.data_train),
-            "\n val: ",
-            len(self.data_val),
-            "\n test: ",
-            len(self.data_test),
-        )   
+            f"loaded datasets ({fmt}, {t1 - t0:.2f}s) — "
+            f"train: {len(self.data_train)}  "
+            f"val: {len(self.data_val)}  "
+            f"test: {len(self.data_test)}"
+        )
 
     def train_model(self, num_epochs=50, batch_size=64, learning_rate=0.001, loss_fn = 'mse'):
         self.model.train()
@@ -469,12 +533,13 @@ class WorldModel(nn.Module):
         
         return output
     
-    #Using train mode allows us to use dropout (0.1 of the neurons) at every step,
-    #feeding that hour into the next hour for accumulated uncertainty.
-    #Accumulated uncertainty is needed for a more accurate std for the graph.
+    # Using dropout at every forward pass gives us MC-Dropout uncertainty estimates:
+    # each stochastic trajectory sees different neurons dropped, accumulating
+    # uncertainty over the autoregressive horizon.
     def sample_autoregressive_multiple(self, x, steps, custom_pl=None, batch_data=None, sample_size=1):
-        self.model.train() #Turns on dropout (since thats how the train is configured) - many other options as well for uncertainty, but dropout is best here bc its already present in train mode
-        try:
+        # Serialise stochastic sampling within this worker so concurrent requests
+        # don't race on the dropout-layer training flags.
+        with self._sample_lock, _dropout_train_mode(self.model), torch.no_grad():
             # Fast path: run all `sample_size` MC-Dropout trajectories together in
             # the batch dimension. One forward pass per step at batch=sample_size
             # instead of sample_size * steps batch-1 passes (~Nx fewer kernel
@@ -500,22 +565,17 @@ class WorldModel(nn.Module):
                     step_outputs.append(x_in.detach())
 
                 # Re-pack into the original interface: list[sample] of list[step] of (1, fh, feat)
-                outputs = [
+                return [
                     [step_outputs[i][s:s + 1] for i in range(steps)]
                     for s in range(S)
                 ]
-                return outputs
-        finally:
-            self.model.eval() #Gets back outta dropout mode
 
-        # Fallback: original per-sample loop (batch_data path / unusual shapes).
-        self.model.train()
-        outputs = []
-        for sample in range(sample_size): #For every stochastic sample
-            output = self.sample_autoregressive(x, steps, custom_pl, batch_data) #All hours
-            outputs.append(output)
-        self.model.eval() #Gets back outta dropout mode
-        return outputs
+            # Fallback: original per-sample loop (batch_data path / unusual shapes).
+            outputs = []
+            for _ in range(sample_size):
+                output = self.sample_autoregressive(x, steps, custom_pl, batch_data)
+                outputs.append(output)
+            return outputs
 
     def unnorm_state_col(self, col_idx, state_vectors):
         mean_val_tensor = self.mean[col_idx]
