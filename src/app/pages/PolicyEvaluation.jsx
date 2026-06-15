@@ -314,7 +314,7 @@ export default function PolicyEvaluation() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div style={{ borderColor: border, background: card }} className="border-b px-5 py-3 flex items-center gap-4 flex-shrink-0">
+      <div style={{ borderColor: border, background: s.sidebar }} className="border-b px-5 py-3 flex items-center gap-4 flex-shrink-0">
         <Activity size={16} style={{ color: scheme.primary }} />
         <div>
           <h1 style={{ color: text }} className="text-sm font-semibold">Weaning Policy Evaluation</h1>
@@ -348,6 +348,11 @@ export default function PolicyEvaluation() {
           )}
         </div>
       </div>
+
+      {/* Horizontally scrollable page body: holds a usable minimum width and scrolls
+          instead of compressing the boxes and graphs when the window is dragged thin. */}
+      <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
+        <div className="h-full min-w-[900px] flex flex-col">
 
       {policyFetchError && (
         <div
@@ -443,7 +448,7 @@ export default function PolicyEvaluation() {
           ].map(({ label, value, desc, color, icon: Icon, bg: ibg }) => (
             <motion.div key={label}
               initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-              style={{ background: card, borderColor: color + '55' }}
+              style={{ background: s.sidebar, borderColor: color + '55' }}
               className="rounded-2xl border-2 p-4">
               <div className="flex items-center gap-2 mb-2">
                 <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: ibg }}>
@@ -458,7 +463,7 @@ export default function PolicyEvaluation() {
         </div>
 
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-          style={{ background: card, borderColor: border }} className="rounded-xl border p-5">
+          style={{ background: s.sidebar, borderColor: border }} className="rounded-xl border p-5">
           <div className="flex items-start justify-between mb-4">
             <div>
               <h2 style={{ color: text }} className="text-sm font-semibold">Success Probability Distribution</h2>
@@ -498,6 +503,8 @@ export default function PolicyEvaluation() {
             </div>
           </div> */}
         </motion.div>
+      </div>
+        </div>
       </div>
     </div>
   );

@@ -24,20 +24,22 @@ export function getSurfaces(isDark) {
     };
   }
   return {
-    /* Dimmer blue-gray (~72–78% L): clearly toned down vs near-white */
-    bg: '#B9C2D1',
-    card: '#C4CCD9',
-    sidebar: '#C4CCD9',
-    border: '#98A3B5',
+    /* Three-step blue hierarchy: soft off-white page is lightest, sidebar/top bar
+       sit a step down, and the primary content boxes/graphs are a deeper blue so
+       the actual information reads as the focal surface. */
+    bg: '#F4F7FC',
+    card: '#D2DEF0',
+    sidebar: '#E3EAF5',
+    border: '#BFCCE0',
     text: '#0F172A',
     subtext: '#3E4A5C',
-    inputBg: '#BFC8D6',
-    muted: '#AEB8C9',
-    gridColor: '#98A3B5',
-    panelBg: '#C4CCD9',
-    panelBorder: '#98A3B5',
-    sectionBg: '#B6C0D0',
-    logoTile: '#BFC8D6',
+    inputBg: '#F4F7FC',
+    muted: '#C7D3E7',
+    gridColor: '#BBC9E0',
+    panelBg: '#D2DEF0',
+    panelBorder: '#BFCCE0',
+    sectionBg: '#E3EAF5',
+    logoTile: '#ECF1F8',
   };
 }
 
@@ -94,7 +96,11 @@ const defaultThresholds = Object.fromEntries(
 );
 
 export function ThemeProvider({ children }) {
-  const [isDark, setIsDark] = useState(true);
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    const stored = window.localStorage.getItem('isDark');
+    return stored === null ? true : stored === 'true';
+  });
   const [colorScheme, setColorScheme] = useState('sapphire');
   const [heartVariant, setHeartVariant] = useState(2);
   const [thresholds, setThresholds] = useState(defaultThresholds);
@@ -104,6 +110,7 @@ export function ThemeProvider({ children }) {
   useEffect(() => {
     if (isDark) document.documentElement.classList.add('dark');
     else document.documentElement.classList.remove('dark');
+    window.localStorage.setItem('isDark', String(isDark));
   }, [isDark]);
 
   // Keep CSS custom properties in sync with the JS theme so shadcn/ui components

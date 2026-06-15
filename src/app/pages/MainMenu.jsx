@@ -247,7 +247,7 @@ export default function MainMenu() {
   return (
     <div className="flex flex-col h-full overflow-y-auto">
       {/* Header */}
-      <div style={{ borderColor: border, background: card }}
+      <div style={{ borderColor: border, background: s.sidebar }}
         className="border-b px-6 py-4 flex items-center justify-between flex-shrink-0">
         <div>
           <h1 style={{ color: text }} className="font-heading text-xl font-semibold">SmartWean AI Weaning Monitor</h1>
@@ -287,7 +287,7 @@ export default function MainMenu() {
         </div> */}
 
         {/* Search + patient details section */}
-        <div className="space-y-4">
+        <div className="space-y-4 overflow-x-auto">
           {/* Search bar with floating suggestions */}
           <div ref={searchRef} className="relative">
             <motion.div
@@ -369,11 +369,11 @@ export default function MainMenu() {
           </div>
 
           {/* Patient details + heart + navigation */}
-          <div className="grid grid-cols-5 gap-5">
+          <div className="grid grid-cols-5 gap-5 min-w-[900px]">
             {/* Selected patient card */}
             <motion.div key={selectedPatientId}
               initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-              style={{ background: card, borderColor: border }}
+              style={{ background: s.sidebar, borderColor: border }}
               className="col-span-3 rounded-xl border p-5">
               <div className="flex items-start justify-between mb-4">
                 <div>

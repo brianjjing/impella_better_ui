@@ -1123,7 +1123,7 @@ export default function Simulator() {
  return (
    <div className="flex flex-col h-full overflow-hidden">
      {/* Header */}
-     <div style={{ borderColor: border, background: card }} className="border-b px-5 py-3 flex items-center gap-4 flex-shrink-0">
+     <div style={{ borderColor: border, background: s.sidebar }} className="border-b px-5 py-3 flex items-center gap-4 flex-shrink-0">
        <Sliders size={16} style={{ color: scheme.primary }} />
        <div>
          <h1 style={{ color: text }} className="text-sm font-semibold">Pump Level Simulator</h1>
@@ -1136,15 +1136,20 @@ export default function Simulator() {
      </div>
 
 
+      {/* Horizontally scrollable page body: holds a usable minimum width and scrolls
+          instead of compressing the boxes and graphs when the window is dragged thin. */}
+      <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
+        <div className="h-full min-w-[900px] flex flex-col">
+
       {/* Recommendation box (left) + Pump level simulator (right) */}
       <div
-        style={{ borderColor: border, background: card }}
+        style={{ borderColor: border, background: s.sidebar }}
         className="flex-shrink-0 border-b overflow-visible">
         <div className="px-5 pt-4 pb-[7px] overflow-visible">
           <div className="flex gap-3 items-stretch overflow-visible" style={{ height: HEADER_BOX_HEIGHT }}>
             {/* Left: recommendation summary (2/3 width) */}
             <div
-              style={{ background: card, borderColor: border }}
+              style={{ background: s.sidebar, borderColor: border }}
               className="w-1/2 rounded-2xl border-2 overflow-visible flex flex-col">
               {/* Top 2/3: recommended pump change */}
               <div className="flex-[2] p-5 flex flex-col">
@@ -1223,7 +1228,7 @@ export default function Simulator() {
             </div>
 
            <div
-             style={{ background: card, borderColor: border }}
+             style={{ background: s.sidebar, borderColor: border }}
              className="w-1/2 rounded-2xl border-2 overflow-hidden flex flex-col p-3">
              <div className="flex-1 min-h-0 flex">
                <div className="flex-1 min-w-0 flex flex-col">
@@ -1246,7 +1251,7 @@ export default function Simulator() {
                    />
                  </div>
                  <div className="flex-shrink-0 mt-2">
-                   <div className="flex items-center justify-between gap-2">
+                   <div className="flex flex-wrap items-center justify-between gap-2">
                      <button
                        type="button"
                        onClick={runSimulation}
@@ -1326,7 +1331,7 @@ export default function Simulator() {
                initial={{ opacity: 0, y: 12 }}
                animate={{ opacity: 1, y: 0 }}
                transition={{ delay: idx * 0.05 }}
-               style={{ background: card, borderColor: border }}
+               style={{ background: s.sidebar, borderColor: border }}
                className="rounded-xl border overflow-visible">
                <div className="flex items-center justify-between px-4 py-2.5 border-b" style={{ borderColor: border }}>
                  <div className="flex items-center gap-2">
@@ -1378,7 +1383,7 @@ export default function Simulator() {
 
        {/* Right sidebar: Current State + 6h Summary */}
        <div className="flex-shrink-0 p-2 pl-0 w-[min(100%,16rem)] min-w-[14rem]">
-         <div style={{ background: card, borderColor: border }} className="h-full rounded-2xl border flex flex-col overflow-hidden">
+         <div style={{ background: s.sidebar, borderColor: border }} className="h-full rounded-2xl border flex flex-col overflow-hidden">
            <div className="flex-1 overflow-y-auto p-4 space-y-4">
              {/* Trend summary */}
              <AnimatePresence>
@@ -1479,6 +1484,8 @@ export default function Simulator() {
          </div>
        </div>
      </div>
+        </div>
+      </div>
    </div>
  );
 }

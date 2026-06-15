@@ -69,7 +69,7 @@ export function HeartLevel2({ features, status, compact = false }) {
         <motion.div
           animate={{ scale: beat ? 1.04 : 1 }}
           transition={{ duration: 0.18, ease: [0.25, 0.46, 0.45, 0.94] }}
-          style={{ filter: `drop-shadow(0 0 ${beat ? 20 : 10}px ${color}66)` }}
+          style={{ filter: `drop-shadow(0 0 ${beat ? 20 : 10}px ${color}66)`, width: '100%', maxWidth: compact ? 160 : 240 }}
         >
           <AnatomicalHeart
             lvColor={lvColor}
@@ -111,7 +111,7 @@ function AnatomicalHeart({ lvColor, mapColor, pulsatility, beat, phase, scheme, 
   const h = compact ? 150 : 225;
 
   return (
-    <svg width={w} height={h} viewBox="0 0 160 150" fill="none">
+    <svg width={w} height={h} viewBox="0 0 160 150" fill="none" preserveAspectRatio="xMidYMid meet" style={{ width: '100%', height: 'auto', display: 'block' }}>
       <defs>
         <radialGradient id="lvGrad" cx="50%" cy="50%">
           <stop offset="0%"   stopColor={lvColor}  stopOpacity="0.6" />
