@@ -5,8 +5,8 @@ The pickle stores torch.Tensor arrays. The npz stores plain float32 numpy arrays
 which load ~5-10x faster and avoid importing torch during deserialization.
 
 Usage:
-    python backend_copy/convert_pkl_to_npz.py
-    python backend_copy/convert_pkl_to_npz.py /path/to/custom.pkl /path/to/output.npz
+    python backend/convert_pkl_to_npz.py
+    python backend/convert_pkl_to_npz.py /path/to/custom.pkl /path/to/output.npz
 """
 from __future__ import annotations
 

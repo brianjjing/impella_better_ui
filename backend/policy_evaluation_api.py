@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Literal, Optional
 
@@ -132,6 +133,49 @@ def _load_sac_policy(env: AbiomedRLEnv, policy_path: str, device: torch.device) 
     return sac_policy
 
 
+# Cached SAC policy singleton. The old code rebuilt the actor, both critics,
+# three Adam optimizers, and re-read the 1.6 MB checkpoint from disk on EVERY
+# request. The policy is inference-only and its architecture is fixed by the
+# world model's obs/action dims, so we load it exactly once and reuse it.
+_sac_policy: Optional[SACPolicy] = None
+
+
+def _build_policy_env() -> AbiomedRLEnv:
+    """Construct the standard continuous-action env used for policy evaluation."""
+    wm = get_forecast_world_model()
+    return AbiomedRLEnv(
+        world_model=wm,
+        max_steps=6,
+        action_space_type="continuous",
+        reward_type="staircase",
+        normalize_rewards=True,
+        seed=42,
+    )
+
+
+def get_sac_policy() -> Optional[SACPolicy]:
+    """Load + cache the SAC policy once.
+
+    Returns None if no checkpoint is found (caller falls back to mock).
+    Raises if a checkpoint exists but fails to load (caller falls back to mock
+    with a distinct 'load failed' message).
+    """
+    global _sac_policy
+    if _sac_policy is not None:
+        return _sac_policy
+    policy_path = _resolve_policy_weights()
+    if policy_path is None:
+        return None
+    env = _build_policy_env()
+    _sac_policy = _load_sac_policy(env, str(policy_path), get_forecast_world_model().device)
+    return _sac_policy
+
+
+def warm_sac_policy() -> Optional[SACPolicy]:
+    """Called at app startup to preload the policy off the request path."""
+    return get_sac_policy()
+
+
 def _feature_dict_from_state(wm, state_tensor: torch.Tensor) -> dict[str, float]:
     unnorm = wm.unnorm_output(state_tensor.unsqueeze(0)).squeeze(0)
     last = unnorm[-1].detach().cpu().numpy()
@@ -139,17 +183,28 @@ def _feature_dict_from_state(wm, state_tensor: torch.Tensor) -> dict[str, float]
 
 
 def _discrete_distribution(policy: SACPolicy, env: AbiomedRLEnv, obs: np.ndarray, n_samples: int = 2048) -> List[float]:
-    counts = np.zeros(8, dtype=np.float64)
+    """Exact p-level distribution in a single forward pass (no Monte-Carlo sampling).
+
+    The old implementation drew `n_samples` (2048) random actions and built a
+    histogram — 2048 sequential forward passes, the dominant cost of this endpoint.
+
+    `policy.action_distribution` computes the same distribution analytically via
+    the Normal CDF in one pass. It reconstructs the p-level normalization from the
+    action-space bounds, which were built with normalize_pl(2)/normalize_pl(10);
+    that reconstruction is only correct when p_min=2 and p_max=10, so we MUST pass
+    p_levels=range(2, 11). We then drop the p10 bin and renormalize over p2..p9 to
+    exactly reproduce the old sampling, which counted only p in [2, 9].
+
+    `n_samples` is accepted for signature compatibility and ignored.
+    """
     with torch.no_grad():
-        for _ in range(n_samples):
-            a = policy.sample_action(obs, deterministic=False)
-            p = int(env._action_to_p_level(a))
-            if 2 <= p <= 9:
-                counts[p - 2] += 1
-    s = counts.sum()
+        res = policy.action_distribution(obs, p_levels=list(range(2, 11)))  # p2..p10
+    probs = np.asarray(res["probabilities"], dtype=np.float64).reshape(-1)  # length 9
+    eight = probs[:8]  # p2..p9 (drop the p10 open bin, mirroring the old [2,9] counting)
+    s = float(eight.sum())
     if s <= 0:
         return [1.0 / 8.0] * 8
-    return (counts / s).tolist()
+    return (eight / s).tolist()
 
 
 def _rollout_sac(
@@ -260,6 +315,127 @@ class PolicyEvaluationResponse(BaseModel):
     detail: Optional[str] = None
 
 
+def _parse_p_levels_query(p_levels_str: Optional[str], hour: int) -> tuple:
+    """Validate and parse the comma-separated p_levels query param into a tuple."""
+    if not p_levels_str:
+        raise HTTPException(
+            status_code=400,
+            detail="p_levels query param is required when hour > 0",
+        )
+    try:
+        seq = [int(x) for x in p_levels_str.split(",") if x != ""]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"p_levels must be comma-separated integers: {e}") from e
+    if len(seq) < hour:
+        raise HTTPException(
+            status_code=400,
+            detail=f"p_levels must contain at least {hour} entries (got {len(seq)})",
+        )
+    for p in seq[:hour]:
+        if p < 2 or p > 9:
+            raise HTTPException(status_code=400, detail="each p_level must be between 2 and 9")
+    return tuple(seq)
+
+
+@lru_cache(maxsize=256)
+def _compute_policy_evaluation(
+    patient_id: str,
+    hour: int,
+    p_levels_tuple: Optional[tuple],
+) -> dict:
+    """Pure computation, cached by (patient_id, hour, p_levels_tuple).
+
+    Returns a plain dict so it stays hashable-friendly and is not mutated by
+    the handler (which only reads it to build Pydantic response objects).
+    The mock rollout is seeded for reproducibility.
+    """
+    wm = get_forecast_world_model()
+    idx = _parse_patient_index(patient_id)
+    state = _initial_state_tensor(wm, idx).to(wm.device)
+
+    if hour > 0 and p_levels_tuple:
+        rolled = state.unsqueeze(0)
+        with torch.no_grad():
+            for h in range(hour):
+                rolled = wm.step(rolled, int(p_levels_tuple[h]))
+        state = rolled.squeeze(0).to(wm.device)
+
+    policy_path = _resolve_policy_weights()
+
+    env = AbiomedRLEnv(
+        world_model=wm,
+        max_steps=6,
+        action_space_type="continuous",
+        reward_type="staircase",
+        normalize_rewards=True,
+        seed=42,
+    )
+    obs, _info = env.reset(options={"state": state})
+
+    if policy_path is None:
+        dist = _MOCK_DIST.get(patient_id, _MOCK_DIST["P002"])
+        np.random.seed(42)
+        steps, total_reward, final_score, quality = _mock_rollout_optimal(wm, state)
+        logger.info(
+            "[policy_evaluation] source=mock patient_id=%s hour=%s reason=no_policy_checkpoint_found",
+            patient_id, hour,
+        )
+        return {
+            "source": "mock",
+            "distribution": dist,
+            "steps": steps,
+            "total_reward": float(total_reward),
+            "final_score": _pump_level_score_stretched_mock(final_score),
+            "quality": quality,
+            "label": "Mock optimal trajectory (no policy checkpoint)",
+            "detail": "SMARTWEAN_POLICY_PATH / policy_abiomed.pth not found; using mock distribution and rollout.",
+        }
+
+    try:
+        policy = get_sac_policy()
+        if policy is None:
+            raise RuntimeError("policy checkpoint disappeared after path resolution")
+    except Exception as e:
+        dist = _MOCK_DIST.get(patient_id, _MOCK_DIST["P002"])
+        np.random.seed(42)
+        steps, total_reward, final_score, quality = _mock_rollout_optimal(wm, state)
+        logger.info(
+            "[policy_evaluation] source=mock patient_id=%s hour=%s reason=policy_load_failed error=%s",
+            patient_id, hour, str(e),
+        )
+        return {
+            "source": "mock",
+            "distribution": dist,
+            "steps": steps,
+            "total_reward": float(total_reward),
+            "final_score": _pump_level_score_stretched_mock(final_score),
+            "quality": quality,
+            "label": "Mock optimal trajectory (policy load failed)",
+            "detail": f"Policy load failed ({e}); using mock.",
+        }
+
+    dist = _discrete_distribution(policy, env, obs)
+    obs2, _ = env.reset(options={"state": state})
+    steps, total_reward, final_score = _rollout_sac(policy, env, obs2, max_steps=6, deterministic=True)
+    quality = _quality_from_reward(total_reward)
+    final_stretched = float(final_score)
+    logger.info(
+        "[policy_evaluation] source=sac patient_id=%s hour=%s policy_path=%s total_reward=%.6f "
+        "staircase_mean_0_10=%.6f",
+        patient_id, hour, str(policy_path), float(total_reward), final_stretched,
+    )
+    return {
+        "source": "sac",
+        "distribution": dist,
+        "steps": steps,
+        "total_reward": float(total_reward),
+        "final_score": final_stretched,
+        "quality": quality,
+        "label": "SAC policy trajectory",
+        "detail": None,
+    }
+
+
 @router.get("/policy_evaluation", response_model=PolicyEvaluationResponse)
 def get_policy_evaluation(
     patient_id: str = Query(..., description="Patient id, e.g. P001 (must exist in training split)"),
@@ -275,149 +451,49 @@ def get_policy_evaluation(
     ),
 ) -> PolicyEvaluationResponse:
     try:
-        wm = get_forecast_world_model()
+        get_forecast_world_model()
     except FileNotFoundError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Model unavailable: {e}") from e
 
+    pid = patient_id.strip().upper()
     try:
-        idx = _parse_patient_index(patient_id)
+        _parse_patient_index(pid)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    p_levels_tuple: Optional[tuple] = None
+    if hour > 0:
+        p_levels_tuple = _parse_p_levels_query(p_levels, hour)
+
     try:
-        state = _initial_state_tensor(wm, idx).to(wm.device)
+        result = _compute_policy_evaluation(pid, hour, p_levels_tuple)
     except IndexError:
         raise HTTPException(status_code=404, detail="Unknown patient_id for training split") from None
-    except ValueError as e:
+    except (ValueError, FileNotFoundError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-
-    if hour > 0:
-        if not p_levels:
-            raise HTTPException(
-                status_code=400,
-                detail="p_levels query param is required when hour > 0",
-            )
-        try:
-            seq = [int(x) for x in p_levels.split(",") if x != ""]
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"p_levels must be comma-separated integers: {e}") from e
-        if len(seq) < hour:
-            raise HTTPException(
-                status_code=400,
-                detail=f"p_levels must contain at least {hour} entries (got {len(seq)})",
-            )
-        for p in seq[:hour]:
-            if p < 2 or p > 9:
-                raise HTTPException(status_code=400, detail="each p_level must be between 2 and 9")
-        rolled = state.unsqueeze(0)
-        with torch.no_grad():
-            for h in range(hour):
-                rolled = wm.step(rolled, int(seq[h]))
-        state = rolled.squeeze(0).to(wm.device)
-
-    pid = patient_id.strip().upper()
-    policy_path = _resolve_policy_weights()
-
-    env = AbiomedRLEnv(
-        world_model=wm,
-        max_steps=6,
-        action_space_type="continuous",
-        reward_type="staircase",
-        normalize_rewards=True,
-        seed=42,
-    )
-
-    device = wm.device
-    obs, _info = env.reset(options={"state": state})
-
-    if policy_path is None:
-        dist = _MOCK_DIST.get(pid, _MOCK_DIST["P001"])
-        steps, total_reward, final_score, quality = _mock_rollout_optimal(wm, state)
-        logger.info(
-            "[policy_evaluation] source=mock patient_id=%s hour=%s reason=no_policy_checkpoint_found",
-            pid,
-            hour,
-        )
-        rollout = RolloutOut(
-            id="R1",
-            label="Mock optimal trajectory (no policy checkpoint)",
-            quality=quality,
-            totalReward=float(total_reward),
-            finalScore=_pump_level_score_stretched_mock(final_score),
-            steps=[PolicyStepOut(**s) for s in steps],
-        )
-        return PolicyEvaluationResponse(
-            patient_id=pid,
-            source="mock",
-            distribution=dist,
-            rollout=rollout,
-            detail="SMARTWEAN_POLICY_PATH / policy_abiomed.pth not found; using mock distribution and rollout.",
-        )
-
-    try:
-        policy = _load_sac_policy(env, str(policy_path), device)
     except Exception as e:
-        dist = _MOCK_DIST.get(pid, _MOCK_DIST["P001"])
-        steps, total_reward, final_score, quality = _mock_rollout_optimal(wm, state)
-        logger.info(
-            "[policy_evaluation] source=mock patient_id=%s hour=%s reason=policy_load_failed error=%s",
-            pid,
-            hour,
-            str(e),
-        )
-        rollout = RolloutOut(
-            id="R1",
-            label="Mock optimal trajectory (policy load failed)",
-            quality=quality,
-            totalReward=float(total_reward),
-            finalScore=_pump_level_score_stretched_mock(final_score),
-            steps=[PolicyStepOut(**s) for s in steps],
-        )
-        return PolicyEvaluationResponse(
-            patient_id=pid,
-            source="mock",
-            distribution=dist,
-            rollout=rollout,
-            detail=f"Policy load failed ({e}); using mock.",
-        )
+        raise HTTPException(status_code=503, detail=f"Model unavailable: {e}") from e
 
-    dist = _discrete_distribution(policy, env, obs)
-    env2 = AbiomedRLEnv(
-        world_model=wm,
-        max_steps=6,
-        action_space_type="continuous",
-        reward_type="staircase",
-        normalize_rewards=True,
-        seed=42,
-    )
-    obs2, _ = env2.reset(options={"state": state})
-    steps, total_reward, final_score = _rollout_sac(policy, env2, obs2, max_steps=6, deterministic=True)
-    quality = _quality_from_reward(total_reward)
-    final_stretched = float(final_score)
-    logger.info(
-        "[policy_evaluation] source=sac patient_id=%s hour=%s policy_path=%s total_reward=%.6f "
-        "staircase_mean_0_10=%.6f",
-        pid,
-        hour,
-        str(policy_path),
-        float(total_reward),
-        final_stretched,
+    info = _compute_policy_evaluation.cache_info()
+    logger.debug(
+        "[policy_evaluation] cache hits=%d misses=%d size=%d",
+        info.hits, info.misses, info.currsize,
     )
 
     rollout = RolloutOut(
         id="R1",
-        label="SAC policy trajectory",
-        quality=quality,
-        totalReward=float(total_reward),
-        finalScore=final_stretched,
-        steps=[PolicyStepOut(**s) for s in steps],
+        label=result["label"],
+        quality=result["quality"],
+        totalReward=result["total_reward"],
+        finalScore=result["final_score"],
+        steps=[PolicyStepOut(**s) for s in result["steps"]],
     )
     return PolicyEvaluationResponse(
         patient_id=pid,
-        source="sac",
-        distribution=dist,
+        source=result["source"],
+        distribution=result["distribution"],
         rollout=rollout,
-        detail=None,
+        detail=result["detail"],
     )

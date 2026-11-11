@@ -5,3 +5,5 @@ backend/__pycache__
 
 .DS_Store
 **/.DS_Store
+
+graph_generation_time.md

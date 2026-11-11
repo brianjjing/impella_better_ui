@@ -1,10 +1,13 @@
 """Shared FastAPI app setup, CORS, routers, and dataset path resolution."""
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+logger = logging.getLogger(__name__)
 
 _BACKEND_DIR = Path(__file__).resolve().parent
 _DEFAULT_DATA_PICKLE = _BACKEND_DIR / "10min_1hr_all_data.pkl"
@@ -26,8 +29,41 @@ def get_data_pickle_path() -> str:
     )
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Warm the heavy singletons at startup so the first user request is fast.
+
+    Without this, the first /api/* call pays the full cost of constructing the
+    transformer, loading the 16 MB checkpoint, loading the data pickle, and
+    (for policy_evaluation) loading the SAC policy — ~15 s on the first request.
+    Doing it here moves that cost to boot time, where no request is waiting.
+    """
+    from backend.forecast_api import get_forecast_world_model
+    from backend.patient_data_api import get_patients_payload
+
+    try:
+        get_forecast_world_model()
+        # Build + memoize the patients payload (deterministic, data-only).
+        get_patients_payload()
+        logger.info("[startup] world model + patients payload warmed")
+    except Exception:
+        # Don't block startup if weights/data are missing in this environment;
+        # the per-request handlers still surface a clear error.
+        logger.exception("[startup] warm-up failed; continuing (lazy load on first request)")
+
+    # Warm the SAC policy too, if a checkpoint is present.
+    try:
+        from backend.policy_evaluation_api import warm_sac_policy
+        warm_sac_policy()
+        logger.info("[startup] SAC policy warmed")
+    except Exception:
+        logger.exception("[startup] SAC policy warm-up skipped")
+
+    yield
+
+
 def create_app() -> FastAPI:
-    app = FastAPI()
+    app = FastAPI(lifespan=_lifespan)
 
     app.add_middleware(
         CORSMiddleware,

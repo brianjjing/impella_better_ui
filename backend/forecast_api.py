@@ -1,9 +1,11 @@
 """POST /api/forecast — world-model rollout for the pump simulator."""
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -75,12 +77,38 @@ def _world_model_weight_candidates() -> list[Path]:
 
 
 def _resolve_data_pickle_path() -> str:
+    """Return the best available dataset path, preferring .npz over .pkl."""
+    def _prefer_npz(p: Path) -> str:
+        """If a .npz sibling exists next to a .pkl, return it instead."""
+        if str(p).endswith(".pkl"):
+            npz = p.with_suffix(".npz")
+            if npz.is_file():
+                return str(npz)
+        return str(p)
+
     env = os.environ.get("SMARTWEAN_DATA_PICKLE")
-    if env and Path(env).is_file():
-        return env
+    if env:
+        env_path = Path(env)
+        if env_path.is_file():
+            return _prefer_npz(env_path)
+        # Also try the .npz directly if caller passed a .pkl that was converted
+        env_npz = env_path.with_suffix(".npz")
+        if env_npz.is_file():
+            return str(env_npz)
+
+    # Check backend dir first for a local .npz (written by convert_pkl_to_npz.py)
+    local_npz = _BACKEND_DIR / "10min_1hr_all_data.npz"
+    if local_npz.is_file():
+        return str(local_npz)
+
+    # Check server path — prefer .npz next to the .pkl
+    server_npz = _SERVER_DATA_PICKLE.with_suffix(".npz")
+    if server_npz.is_file():
+        return str(server_npz)
     if _SERVER_DATA_PICKLE.is_file():
         return str(_SERVER_DATA_PICKLE)
-    return get_data_pickle_path()
+
+    return _prefer_npz(Path(get_data_pickle_path()))
 
 
 def _resolve_world_model_weights() -> Path:
@@ -101,6 +129,9 @@ def _resolve_world_model_weights() -> Path:
     )
 
 
+_logger = logging.getLogger(__name__)
+
+
 def get_forecast_world_model() -> WorldModel:
     """Lazy singleton: trained 10min_1hr model with forecast_horizon=6 (matches checkpoint)."""
     global _world_model
@@ -116,9 +147,14 @@ def get_forecast_world_model() -> WorldModel:
     kwargs["device"] = torch.device(device_s)
 
     wm = WorldModel(**kwargs)
-    path = _resolve_world_model_weights()
-    wm.load_model(str(path))
-    wm.load_data(_resolve_data_pickle_path())
+    weights_path = _resolve_world_model_weights()
+    data_path = _resolve_data_pickle_path()
+    fmt = "npz" if data_path.endswith(".npz") else "pkl"
+    _logger.info("[world_model] loading weights from %s", weights_path)
+    _logger.info("[world_model] loading data from %s  (format=%s)", data_path, fmt)
+    wm.load_model(str(weights_path))
+    wm.load_data(data_path)
+    _logger.info("[world_model] ready — device=%s  data_format=%s", device_s, fmt)
     _world_model = wm
     return wm
 
@@ -159,48 +195,32 @@ class ForecastResponse(BaseModel):
     forecast: List[dict]
 
 
-@router.post("/forecast", response_model=ForecastResponse)
-def post_forecast(body: ForecastRequest) -> ForecastResponse:
-    try:
-        wm = get_forecast_world_model()
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Model unavailable: {e}") from e
+@lru_cache(maxsize=256)
+def _compute_forecast(patient_id: str, p_levels: tuple) -> List[dict]:
+    """Pure computation, cached by (patient_id, p_levels).
 
-    try:
-        idx = _parse_patient_index(body.patient_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    try:
-        state = _initial_state_tensor(wm, idx)
-    except IndexError:
-        raise HTTPException(status_code=404, detail="Unknown patient_id for training split") from None
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    # Use the actual observed data window directly as the initial state (no warmup).
-    # Iteratively predict each of the 6 user-specified hours from this state.
+    A fixed seed is applied before the MC-Dropout ensemble so uncertainty bands
+    are reproducible across repeated calls for the same inputs.
+    """
+    wm = get_forecast_world_model()
+    idx = _parse_patient_index(patient_id)
+    state = _initial_state_tensor(wm, idx)
     state = state.unsqueeze(0).to(wm.device)  # (1, 6, 12)
-    p_levels = [int(p) for p in body.p_levels]
+    p_list = [int(p) for p in p_levels]
     forecast_rows: List[dict] = []
 
     with torch.no_grad():
-        # Deterministic central trajectory (unchanged): the "actual" line.
         det_state = state
         det_per_hour: List[Any] = []
-        for p in p_levels:
-            det_state = wm.step(det_state, p)  # (1, 6, 12)
-            det_per_hour.append(wm.unnorm_output(det_state.squeeze(0)).cpu().numpy())  # (6, 12)
+        for p in p_list:
+            det_state = wm.step(det_state, p)
+            det_per_hour.append(wm.unnorm_output(det_state.squeeze(0)).cpu().numpy())
 
-        # Stochastic ensemble: MC-Dropout autoregressive trajectories → per-step std
-        # for the uncertainty band. Mean is computed but unused; we keep the central
-        # line deterministic so identical requests yield identical lines.
-        _mean_pred, std_pred = get_transformer_confidence(wm, state, p_levels, num_samples=10)
-        # std_pred shape: (steps, forecast_horizon=6, num_features=12)
+        # Fix seed so the MC-Dropout uncertainty bands are identical on cache hits.
+        torch.manual_seed(0)
+        _mean_pred, std_pred = get_transformer_confidence(wm, state, p_list, num_samples=10)
 
-        for hour in range(len(p_levels)):
+        for hour in range(len(p_list)):
             hour_arr = det_per_hour[hour]
             for step in range(6):
                 label = f"Hour {hour + 1}" if step == 5 else f"+{(step + 1) * 10}m"
@@ -221,4 +241,34 @@ def post_forecast(body: ForecastRequest) -> ForecastResponse:
                         entry[f"{key}_hi"] = None
                 forecast_rows.append(entry)
 
-    return ForecastResponse(patient_id=body.patient_id.upper(), forecast=forecast_rows)
+    return forecast_rows
+
+
+@router.post("/forecast", response_model=ForecastResponse)
+def post_forecast(body: ForecastRequest) -> ForecastResponse:
+    try:
+        get_forecast_world_model()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Model unavailable: {e}") from e
+
+    pid = body.patient_id.strip().upper()
+    try:
+        _parse_patient_index(pid)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    try:
+        forecast_rows = _compute_forecast(pid, tuple(int(p) for p in body.p_levels))
+    except IndexError:
+        raise HTTPException(status_code=404, detail="Unknown patient_id for training split") from None
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Model unavailable: {e}") from e
+
+    info = _compute_forecast.cache_info()
+    _logger.debug("[forecast] cache hits=%d misses=%d size=%d", info.hits, info.misses, info.currsize)
+
+    return ForecastResponse(patient_id=pid, forecast=forecast_rows)
