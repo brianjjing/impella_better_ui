@@ -1,7 +1,9 @@
 import json
+import re
 import math
 import logging
 
+import numpy as np
 import torch
 
 from fastapi import APIRouter, HTTPException
@@ -132,6 +134,45 @@ def get_patients():
     except Exception:
         logger.exception("[patients] list request failed")
         raise
+
+
+_future = _next_window = None
+
+
+def _clinician_rows(wm, idx: int, hours: int = 6) -> list[dict]:
+    """What really happened after T0h: up to `hours` of observed data (incl. the clinician's P-level, keyed
+    'tauLV' like the timeline). Each window holds 1 h past T0h, and windows are shuffled, but a window's
+    future hour is exactly another window's input hour, so chaining them recovers longer stretches."""
+    global _future, _next_window
+    if _next_window is None:
+        ds = wm.data_train
+        n = len(ds.data)
+        # Normalized future hours (N, 6, 12): the 11 feature labels plus the P-level column, same layout as ds.data.
+        _future = np.concatenate([np.asarray(ds.labels).reshape(n, 6, -1), np.asarray(ds.pl)[:, :, None]], axis=2)
+        by_input = {np.asarray(ds.data[i]).tobytes(): i for i in range(n)}
+        _next_window = [by_input.get(_future[i].tobytes()) for i in range(n)]
+
+    rows = []
+    for hour in range(hours):
+        unnorm = wm.unnorm_output(_future[idx]).numpy()  # (6, 12)
+        for step in range(6):
+            row = {"t": len(rows), "label": f"Hour {hour + 1}" if step == 5 else f"+{(step + 1) * 10}m"}
+            row.update({k: _safe_float(unnorm[step, i]) for i, k in enumerate(FEATURE_KEYS)})
+            rows.append(row)
+        idx = _next_window[idx]
+        if idx is None:
+            break
+    return rows
+
+
+@router.get("/patients/{patient_id}/clinician")
+def get_patient_clinician(patient_id: str):
+    """The real trajectory after T0h (clinician P-levels and observed features), in /forecast's row format."""
+    wm = get_forecast_world_model()
+    m = re.fullmatch(r"P(\d+)", patient_id.strip(), re.IGNORECASE)
+    if not m or int(m.group(1)) >= len(wm.data_train.data):
+        raise HTTPException(status_code=404, detail=f"Patient {patient_id} not found")
+    return _clinician_rows(wm, int(m.group(1)))
 
 
 @router.get("/patients/{patient_id}/timeline")

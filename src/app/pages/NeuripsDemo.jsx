@@ -19,7 +19,8 @@ import { statusConfig } from './MainMenu';
 const MODELS = ['CORMPO', 'GORMPO-KDE', 'GORMPO-VAE', 'GORMPO-RealNVP', 'GORMPO-DDPM', 'GORMPO-NeuralODE'];
 // The left-hand model is drawn dashed everywhere (right solid), so the two runs differ by more than color.
 const DASH = [6, 4];
-const HOURS = ['0', '1', '2', '3', '4', '5', '6'];
+// What really happened (clinician's P-levels, observed features): a grayish-white baseline, mid-gray on the light theme.
+const clinicianColor = isDark => (isDark ? '#E2E8F0' : '#8B95A7');
 const SEVERITY_FEATURES = ['MAP', 'HR', 'pulsatility'];
 const API = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? '' : 'http://localhost:8000');
 
@@ -135,13 +136,24 @@ function PatientSearch({ patients, loading, selectedId, onSelect, s, scheme }) {
   );
 }
 
-/** Display-only P-level rollout: hour 0 is the patient's starting level, hours 1–6 the model's picks. */
-function PLevelChart({ levels, dashed, s, scheme }) {
+/** Display-only P-level rollout: hour 0 is the patient's starting level, hours 1–6 the model's picks.
+ *  `clinician` is the real P-level every 10 min from hour 0, drawn behind as the baseline. */
+function PLevelChart({ levels, clinician, dashed, s, scheme, isDark }) {
   const data = useMemo(() => ({
-    labels: HOURS,
-    datasets: levels
+    datasets: [
+      ...(clinician
+        ? [{
+            data: clinician.map((y, i) => ({ x: i / 6, y })),
+            borderColor: clinicianColor(isDark),
+            borderWidth: 2,
+            stepped: 'before',
+            clip: false,
+            pointRadius: 0,
+          }]
+        : []),
+      ...(levels
       ? [{
-          data: levels,
+          data: levels.map((y, x) => ({ x, y })),
           borderColor: scheme.primary,
           borderWidth: 2,
           borderDash: dashed ? DASH : [],
@@ -151,8 +163,9 @@ function PLevelChart({ levels, dashed, s, scheme }) {
           pointBackgroundColor: levels.map((_, i) => (i ? scheme.primary : scheme.accent)),
           pointBorderColor: levels.map((_, i) => (i ? scheme.primary : scheme.accent)),
         }]
-      : [],
-  }), [levels, dashed, scheme]);
+      : []),
+    ],
+  }), [levels, clinician, dashed, scheme, isDark]);
 
   const options = useMemo(() => ({
     responsive: true,
@@ -166,10 +179,13 @@ function PLevelChart({ levels, dashed, s, scheme }) {
     },
     scales: {
       x: {
+        type: 'linear',
+        min: 0,
+        max: 6,
         grid: { color: s.gridColor },
         border: { display: false },
         title: { display: true, text: 'Hour', color: s.subtext, font: { size: 11, weight: '600' } },
-        ticks: { color: s.subtext, font: { size: 11, weight: '500' } },
+        ticks: { color: s.subtext, font: { size: 11, weight: '500' }, stepSize: 1 },
       },
       y: {
         min: 2,
@@ -186,29 +202,31 @@ function PLevelChart({ levels, dashed, s, scheme }) {
 }
 
 /** Historical line plus one forecast line (with its ±σ band) per model run; the run-row legend says which line is which. */
-function FeatureChart({ feature, thr, hist, runs, s, scheme, isDark }) {
+function FeatureChart({ feature, thr, hist, runs, clinician, s, scheme, isDark }) {
   const { data, options } = useMemo(() => {
     const sev = SEVERITY_FEATURES.includes(feature);
     const plain = isDark ? '#6B7280' : '#2A3340';
     const forecasts = runs && hist.length ? runs : [];
-    const labels = [...hist.map(r => r.label), ...(forecasts[0]?.forecast.map(r => r.label) ?? [])];
+    const real = hist.length && clinician ? clinician : [];
+    // Forecast and clinician rows share labels (+10m … Hour 6); the forecast always spans all 6 hours.
+    const labels = [...hist.map(r => r.label), ...(forecasts[0]?.forecast ?? real).map(r => r.label)];
     const color = v => (typeof v !== 'number' ? 'transparent' : sev ? continuousSeverityColor(v, thr) : plain);
     const big = c => isHourLabel(labels[c.dataIndex]);
-    const line = (label, values, width, dash) => ({
+    const line = (label, values, width, dash, fixed) => ({
       label,
       data: values,
-      borderColor: plain,
+      borderColor: fixed ?? plain,
       borderWidth: width,
       borderDash: dash,
-      // Severity features: each segment takes the severity color of its midpoint.
-      ...(sev && { segment: { borderColor: c => continuousSeverityColor((c.p0.parsed.y + c.p1.parsed.y) / 2, thr) } }),
+      // Severity features: each segment takes the severity color of its midpoint (not the fixed-color clinician line).
+      ...(sev && !fixed && { segment: { borderColor: c => continuousSeverityColor((c.p0.parsed.y + c.p1.parsed.y) / 2, thr) } }),
       tension: 0,
       spanGaps: true,
       pointRadius: c => (big(c) ? 4.5 : 2.5),
       pointHoverRadius: c => (big(c) ? 5.5 : 3.5),
       pointHitRadius: 8,
-      pointBackgroundColor: c => color(c.raw),
-      pointBorderColor: c => (big(c) ? plain : 'transparent'),
+      pointBackgroundColor: c => fixed ?? color(c.raw),
+      pointBorderColor: c => (big(c) ? fixed ?? plain : 'transparent'),
       pointBorderWidth: c => (big(c) ? 2 : 0),
     });
     // Forecast lines and their bands start at T0h so they grow out of the historical line.
@@ -235,6 +253,7 @@ function FeatureChart({ feature, thr, hist, runs, s, scheme, isDark }) {
         band(`${run.model} +σ`, series(run, `${feature}_hi`), '-1'),
       ]),
       line('Historical', hist.map(r => r[feature]), 1.5, []),
+      ...(real.length ? [line('Clinician (actual)', [...lead, ...real.map(r => r[feature])], 2.5, [], clinicianColor(isDark))] : []),
       ...forecasts.map((run, i) => line(run.model, series(run, feature), 3, i ? [] : DASH)),
     ];
 
@@ -250,7 +269,7 @@ function FeatureChart({ feature, thr, hist, runs, s, scheme, isDark }) {
           legend: { display: false },
           annotation: {
             common: { drawTime: 'beforeDatasetsDraw' },
-            annotations: forecasts.length
+            annotations: forecasts.length || real.length
               ? {
                   forecastStart: {
                     type: 'line',
@@ -273,7 +292,10 @@ function FeatureChart({ feature, thr, hist, runs, s, scheme, isDark }) {
             padding: 12,
             callbacks: {
               label: c => `${c.dataset.label}: ${c.parsed.y.toFixed(2)}`,
-              labelColor: c => ({ borderColor: color(c.parsed.y), backgroundColor: color(c.parsed.y) }),
+              labelColor: c => {
+                const col = c.dataset.borderColor === plain ? color(c.parsed.y) : c.dataset.borderColor;
+                return { borderColor: col, backgroundColor: col };
+              },
             },
           },
         },
@@ -297,7 +319,7 @@ function FeatureChart({ feature, thr, hist, runs, s, scheme, isDark }) {
         },
       },
     };
-  }, [feature, thr, hist, runs, s, scheme, isDark]);
+  }, [feature, thr, hist, runs, clinician, s, scheme, isDark]);
 
   return <Line data={data} options={options} />;
 }
@@ -336,6 +358,18 @@ export default function NeuripsDemo() {
       setRunning(false);
     }
   }
+
+  // Real trajectory after T0h, keyed by patient so a late reply for a patient the user left is never shown.
+  const [clinicianData, setClinicianData] = useState(null);
+  useEffect(() => {
+    if (!patient?.id) return;
+    const id = patient.id;
+    fetch(`${API}/api/patients/${id}/clinician`)
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(rows => setClinicianData({ id, rows }))
+      .catch(e => console.error('[clinician fetch]', e));
+  }, [patient?.id]);
+  const clinician = clinicianData && clinicianData.id === patient?.id ? clinicianData.rows : null;
 
   const hist = patient?.timeline ?? [];
 
@@ -388,9 +422,11 @@ export default function NeuripsDemo() {
                   <div className="flex-1 min-h-0 relative">
                     <PLevelChart
                       levels={runs && patient ? [patient.deviceLevel, ...runs[i].p_levels] : null}
+                      clinician={clinician && patient ? [patient.deviceLevel, ...clinician.map(r => Math.round(r.tauLV))] : null}
                       dashed={i === 0}
                       s={s}
                       scheme={scheme}
+                      isDark={isDark}
                     />
                   </div>
                 </div>
@@ -437,8 +473,16 @@ export default function NeuripsDemo() {
                   </div>
                 </div>
                 {/* Which line is which model: left model dashed, right model solid, same as every graph. Flush right. */}
-                {models.some(Boolean) && (
+                {(clinician || models.some(Boolean)) && (
                   <div className="flex items-center gap-4">
+                    {clinician && (
+                      <span className="flex items-center gap-1.5 text-xs font-medium whitespace-nowrap" style={{ color: s.text }}>
+                        <svg width="26" height="4" aria-hidden>
+                          <line x1="0" y1="2" x2="26" y2="2" stroke={clinicianColor(isDark)} strokeWidth="3" />
+                        </svg>
+                        Clinician (actual)
+                      </span>
+                    )}
                     {models.map((m, i) => m && (
                       <span key={i} className="flex items-center gap-1.5 text-xs font-medium whitespace-nowrap" style={{ color: s.text }}>
                         <svg width="26" height="4" aria-hidden>
@@ -476,6 +520,7 @@ export default function NeuripsDemo() {
                         thr={thresholds[feature]}
                         hist={hist}
                         runs={runs}
+                        clinician={clinician}
                         s={s}
                         scheme={scheme}
                         isDark={isDark}
