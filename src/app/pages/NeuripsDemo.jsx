@@ -17,7 +17,7 @@ import { statusConfig } from './MainMenu';
 
 // Must match POLICY_MODELS in backend/policy_evaluation_api.py.
 const MODELS = ['CORMPO', 'GORMPO-KDE', 'GORMPO-VAE', 'GORMPO-RealNVP', 'GORMPO-DDPM', 'GORMPO-NeuralODE'];
-// The right-hand model is drawn dashed everywhere, so the two runs differ by more than color.
+// The left-hand model is drawn dashed everywhere (right solid), so the two runs differ by more than color.
 const DASH = [6, 4];
 const HOURS = ['0', '1', '2', '3', '4', '5', '6'];
 const SEVERITY_FEATURES = ['MAP', 'HR', 'pulsatility'];
@@ -25,30 +25,6 @@ const API = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? '' : 'ht
 
 const patientIndex = p => Number(p.id.slice(1));
 const isHourLabel = l => typeof l === 'string' && (l.startsWith('T') || l.startsWith('Hour '));
-
-// Writes each model's name just past the end of its forecast line, nudging the pair apart if they'd overlap.
-const endLabels = {
-  id: 'endLabels',
-  afterDatasetsDraw(chart, _args, opts) {
-    const items = chart.data.datasets.flatMap((ds, i) => {
-      const pt = ds.endLabel ? chart.getDatasetMeta(i).data.at(-1) : null;
-      return pt && Number.isFinite(pt.y) ? [{ text: ds.endLabel, x: pt.x + 8, y: pt.y }] : [];
-    });
-    if (items.length === 2 && Math.abs(items[0].y - items[1].y) < 12) {
-      const [upper, lower] = items[0].y <= items[1].y ? items : [items[1], items[0]];
-      const mid = (upper.y + lower.y) / 2;
-      upper.y = mid - 6;
-      lower.y = mid + 6;
-    }
-    const { ctx } = chart;
-    ctx.save();
-    ctx.font = `10px ${chart.options.font?.family ?? 'sans-serif'}`;
-    ctx.fillStyle = opts.color;
-    ctx.textBaseline = 'middle';
-    items.forEach(it => ctx.fillText(it.text, it.x, it.y));
-    ctx.restore();
-  },
-};
 
 function PatientSearch({ patients, loading, selectedId, onSelect, s, scheme }) {
   const [query, setQuery] = useState('');
@@ -169,7 +145,7 @@ function PLevelChart({ levels, dashed, s, scheme }) {
           borderColor: scheme.primary,
           borderWidth: 2,
           borderDash: dashed ? DASH : [],
-          stepped: 'before',
+          stepped: 'before', // each level holds from its hour to the next (hour 0 = current level, held to hour 1)
           clip: false,
           pointRadius: 4,
           pointBackgroundColor: levels.map((_, i) => (i ? scheme.primary : scheme.accent)),
@@ -187,13 +163,6 @@ function PLevelChart({ levels, dashed, s, scheme }) {
     plugins: {
       legend: { display: false },
       tooltip: { enabled: false },
-      annotation: {
-        common: { drawTime: 'beforeDatasetsDraw' },
-        annotations: {
-          forecastRegion: { type: 'box', xMin: 1, xMax: 6, backgroundColor: `${scheme.forecast}18`, borderWidth: 0 },
-          forecastStart: { type: 'line', xMin: 1, xMax: 1, borderColor: s.subtext, borderWidth: 1.25, borderDash: [4, 4] },
-        },
-      },
     },
     scales: {
       x: {
@@ -211,12 +180,12 @@ function PLevelChart({ levels, dashed, s, scheme }) {
         ticks: { color: s.subtext, font: { size: 10 }, stepSize: 1, autoSkip: false, callback: v => `P${v}` },
       },
     },
-  }), [s, scheme]);
+  }), [s]);
 
   return <Line data={data} options={options} />;
 }
 
-/** Historical line plus one forecast line (with its ±σ band) per model run, labeled with its model at the right end. */
+/** Historical line plus one forecast line (with its ±σ band) per model run; the run-row legend says which line is which. */
 function FeatureChart({ feature, thr, hist, runs, s, scheme, isDark }) {
   const { data, options } = useMemo(() => {
     const sev = SEVERITY_FEATURES.includes(feature);
@@ -266,10 +235,7 @@ function FeatureChart({ feature, thr, hist, runs, s, scheme, isDark }) {
         band(`${run.model} +σ`, series(run, `${feature}_hi`), '-1'),
       ]),
       line('Historical', hist.map(r => r[feature]), 1.5, []),
-      ...forecasts.map((run, i) => ({
-        ...line(run.model, series(run, feature), 3, i ? DASH : []),
-        endLabel: run.model,
-      })),
+      ...forecasts.map((run, i) => line(run.model, series(run, feature), 3, i ? [] : DASH)),
     ];
 
     return {
@@ -279,10 +245,9 @@ function FeatureChart({ feature, thr, hist, runs, s, scheme, isDark }) {
         maintainAspectRatio: false,
         animation: false,
         interaction: { mode: 'index', intersect: false },
-        layout: { padding: { right: forecasts.length ? 110 : 8 } }, // room for the end labels
+        layout: { padding: { right: 8 } }, // just enough that the last hour's point isn't clipped
         plugins: {
           legend: { display: false },
-          endLabels: { color: s.subtext },
           annotation: {
             common: { drawTime: 'beforeDatasetsDraw' },
             annotations: forecasts.length
@@ -334,7 +299,7 @@ function FeatureChart({ feature, thr, hist, runs, s, scheme, isDark }) {
     };
   }, [feature, thr, hist, runs, s, scheme, isDark]);
 
-  return <Line data={data} options={options} plugins={[endLabels]} />;
+  return <Line data={data} options={options} />;
 }
 
 export default function NeuripsDemo() {
@@ -356,12 +321,14 @@ export default function NeuripsDemo() {
     const runKey = key;
     setRunning(true);
     try {
-      const data = await Promise.all(models.map(async model => {
+      // Left then right, one at a time, so the backend logs the rollouts in graph order (it serializes them anyway).
+      const data = [];
+      for (const model of models) {
         const res = await fetch(`${API}/api/policy_forecast?${new URLSearchParams({ patient_id: patient.id, model })}`);
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : `${model}: HTTP ${res.status}`);
-        return body;
-      }));
+        data.push(body);
+      }
       setResult({ key: runKey, runs: data });
     } catch (e) {
       setResult({ key: runKey, error: e instanceof Error ? e.message : 'Forecast failed' });
@@ -421,7 +388,7 @@ export default function NeuripsDemo() {
                   <div className="flex-1 min-h-0 relative">
                     <PLevelChart
                       levels={runs && patient ? [patient.deviceLevel, ...runs[i].p_levels] : null}
-                      dashed={i === 1}
+                      dashed={i === 0}
                       s={s}
                       scheme={scheme}
                     />
@@ -430,7 +397,8 @@ export default function NeuripsDemo() {
               ))}
             </div>
 
-            {/* Run button centered under the graphs; severity legend at the right of the same row. */}
+            {/* Run button centered under the graphs; severity scale, then the line-style legend flush right, in the same
+                row (they wrap onto two lines rather than push the button off-center when the row is narrow). */}
             <div className="grid grid-cols-[1fr_auto_1fr] items-center mt-3 pb-2">
               <button
                 type="button"
@@ -450,11 +418,9 @@ export default function NeuripsDemo() {
                 </motion.div>
                 {running ? 'Simulating…' : 'Run forecast'}
               </button>
-              <div className="justify-self-end flex items-center gap-3">
-                <span className="text-xs uppercase tracking-widest font-semibold" style={{ color: s.subtext }}>
-                  Severity
-                </span>
-                {/* Only the bar is in flow, so it centers on the SEVERITY text; the labels hang below it. */}
+              {/* gap-y-7 clears the bar's hanging labels if the legend ever wraps under it. */}
+              <div className="justify-self-end flex flex-wrap items-center justify-end gap-x-10 gap-y-7">
+                {/* Only the bar is in flow, so it centers on the legend; the labels hang below it. */}
                 <div className="relative w-56">
                   <div
                     className="h-2.5 rounded-full"
@@ -470,6 +436,19 @@ export default function NeuripsDemo() {
                     <span>Critical</span>
                   </div>
                 </div>
+                {/* Which line is which model: left model dashed, right model solid, same as every graph. Flush right. */}
+                {models.some(Boolean) && (
+                  <div className="flex items-center gap-4">
+                    {models.map((m, i) => m && (
+                      <span key={i} className="flex items-center gap-1.5 text-xs font-medium whitespace-nowrap" style={{ color: s.text }}>
+                        <svg width="26" height="4" aria-hidden>
+                          <line x1="0" y1="2" x2="26" y2="2" stroke={s.subtext} strokeWidth="3" strokeDasharray={i ? undefined : DASH.join(' ')} />
+                        </svg>
+                        {m}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             {error && (

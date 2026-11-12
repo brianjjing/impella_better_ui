@@ -21,6 +21,7 @@ from backend.forecast_api import (
     _safe_float,
     get_forecast_world_model,
 )
+from backend.patient_data_api import get_patients_payload
 from backend.reward_func import compute_reward_staircase
 from backend.policy_models import ActorProb, Critic, DiagGaussian, MLP
 from backend.rl_env import AbiomedRLEnv
@@ -544,6 +545,9 @@ def get_policy_forecast(patient_id: str = Query(...), model: str = Query(...)) -
         with _demo_lock:
             p_levels = _policy_p_levels(pid, model)
             forecast = _compute_forecast(pid, p_levels)
+            # H0 is the level the graph starts at (deviceLevel), then the policy's picks for hours 1-6.
+            start = get_patients_payload()[_parse_patient_index(pid)]["deviceLevel"]
+            print(f"{model} rollout: {'-'.join(map(str, (start, *p_levels)))}", flush=True)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except IndexError:

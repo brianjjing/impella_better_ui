@@ -82,11 +82,10 @@ def get_patients_payload():
     timelines = _build_all_timelines(wm)
     N = len(timelines)
 
-    # Read p-level (last column) from the first hour to derive a representative deviceLevel
-    first_hour_norm = torch.as_tensor(wm.data_train.data[:, :, -1]).float()  # (N, 6)
-    pl_unnorm = first_hour_norm * float(wm.std[-1]) + float(wm.mean[-1])  # (N, 6)
-    mean_pl = pl_unnorm.mean(dim=1)  # (N,)
-    device_levels = mean_pl.round().clamp(2, 9).int().tolist()
+    # deviceLevel = P-level at T0h (last step), where forecasts and policy rollouts start. Not the window
+    # mean: a P9→P2 wean [9,9,9,3.1,2,2] would average to a P6 the patient was never at.
+    last_pl = torch.as_tensor(wm.data_train.data[:, -1, -1]).float() * float(wm.std[-1]) + float(wm.mean[-1])  # (N,)
+    device_levels = last_pl.round().clamp(2, 9).int().tolist()
 
     patients = []
     for patient_idx in range(N):
