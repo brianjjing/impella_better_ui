@@ -31,7 +31,7 @@ const statusConfig = {
   weaned:    { icon: <CheckCircle size={10} />, label: 'Weaned' },
 };
 
-function scoreMatch(patient, query) {
+export function scoreMatch(patient, query) {
   const q = query.toLowerCase().trim();
   if (!q) return -1;
   const name = patient.name.toLowerCase();
@@ -47,6 +47,7 @@ export default function Layout() {
   const { isDark, setIsDark, scheme, heartVariant } = useTheme();
   const location = useLocation();
   const isHome = location.pathname === '/';
+  const isDemo = location.pathname === '/neurips-demo'; // standalone page: no sidebar
 
   const [collapsed, setCollapsed]         = useState(false);
   const [settingsOpen, setSettingsOpen]   = useState(false);
@@ -163,6 +164,7 @@ export default function Layout() {
   return (
     <div style={{ background: bg }} className="flex h-screen w-full overflow-hidden">
       {/* Main Sidebar */}
+      {!isDemo && (
       <motion.aside
         animate={{ width: collapsed ? 64 : 240 }}
         transition={{ duration: 0.25, ease: 'easeInOut' }}
@@ -376,6 +378,7 @@ export default function Layout() {
           </div>
         </div>
       </motion.aside>
+      )}
 
       {/* Main content */}
       <main className="flex-1 overflow-hidden flex flex-col min-w-0">

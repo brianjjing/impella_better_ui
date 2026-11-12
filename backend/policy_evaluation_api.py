@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Literal, Optional
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from backend.forecast_api import (
     FEATURE_KEYS,
+    _compute_forecast,
     _initial_state_tensor,
     _parse_patient_index,
     _safe_float,
@@ -497,3 +499,57 @@ def get_policy_evaluation(
         rollout=rollout,
         detail=result["detail"],
     )
+
+
+# --- NeurIPS demo: compare two policies' rollouts side by side --------------------------
+# Keys are the dropdown labels on the /neurips-demo page (src/app/pages/NeuripsDemo.jsx).
+POLICY_MODELS = {
+    "CORMPO": "/public/gormpo/models/cormpo.pth",
+    "GORMPO-KDE": "/public/gormpo/models/rl/abiomed/kde/seed_42_0313_180343-abiomed_mbpo_kde/policy_abiomed.pth",
+    "GORMPO-VAE": "/public/gormpo/models/rl/abiomed/vae/seed_42_0313_180508-abiomed_mbpo_vae/policy_abiomed.pth",
+    "GORMPO-RealNVP": "/public/gormpo/models/rl/abiomed/realnvp/seed_42_0310_045907-abiomed_mbpo_realnvp/policy_abiomed.pth",
+    "GORMPO-DDPM": "/public/gormpo/models/rl/abiomed/seed_42_0313_181933-abiomed_mbpo_diffusion/policy_abiomed.pth",
+    "GORMPO-NeuralODE": "/public/gormpo/models/rl/abiomed/seed_42_0313_182035-abiomed_mbpo_neuralode/policy_abiomed.pth",
+}
+
+# ponytail: one lock serializes demo runs. The MC-dropout in _compute_forecast flips the shared
+# world model's dropout layers to train mode, so a concurrent rollout would pick up dropout noise
+# (and lru_cache would keep the bad result). Per-request model copies if throughput ever matters.
+_demo_lock = threading.Lock()
+
+
+@lru_cache(maxsize=None)
+def _get_policy(model: str) -> SACPolicy:
+    return _load_sac_policy(_build_policy_env(), POLICY_MODELS[model], get_forecast_world_model().device)
+
+
+@lru_cache(maxsize=1024)
+def _policy_p_levels(patient_id: str, model: str) -> tuple:
+    """P-levels the policy picks on a deterministic 6-hour rollout from the patient's starting state."""
+    wm = get_forecast_world_model()
+    env = _build_policy_env()
+    state = _initial_state_tensor(wm, _parse_patient_index(patient_id)).to(wm.device)
+    obs, _ = env.reset(options={"state": state})
+    _rollout_sac(_get_policy(model), env, obs, max_steps=6)
+    return tuple(env.episode_actions)
+
+
+@router.get("/policy_forecast")
+def get_policy_forecast(patient_id: str = Query(...), model: str = Query(...)) -> dict:
+    """The model's recommended P-levels plus the world-model forecast under them (same rows as /forecast)."""
+    if model not in POLICY_MODELS:
+        raise HTTPException(status_code=400, detail=f"Unknown model {model!r}")
+    pid = patient_id.strip().upper()
+    try:
+        with _demo_lock:
+            p_levels = _policy_p_levels(pid, model)
+            forecast = _compute_forecast(pid, p_levels)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except IndexError:
+        raise HTTPException(status_code=404, detail=f"Unknown patient_id {pid}") from None
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=f"{model} checkpoint not found: {e.filename}") from e
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"{model} unavailable: {e}") from e
+    return {"patient_id": pid, "model": model, "p_levels": list(p_levels), "forecast": forecast}

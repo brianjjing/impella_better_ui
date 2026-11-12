@@ -13,7 +13,7 @@ import { HeartLevel3 } from '../components/heart/HeartLevel3';
 import { HeartLevel2 } from '../components/heart/HeartLevel2';
 import { HeartLevel1 } from '../components/heart/HeartLevel1';
 
-const statusConfig = {
+export const statusConfig = {
   critical:  { icon: <AlertCircle size={12} />, label: 'Critical' },
   warning:   { icon: <AlertCircle size={12} />, label: 'Warning' },
   stable:    { icon: <Clock       size={12} />, label: 'Stable' },
