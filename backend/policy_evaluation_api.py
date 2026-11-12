@@ -143,14 +143,14 @@ def _load_sac_policy(env: AbiomedRLEnv, policy_path: str, device: torch.device) 
 _sac_policy: Optional[SACPolicy] = None
 
 
-def _build_policy_env() -> AbiomedRLEnv:
+def _build_policy_env(reward_type: str = "staircase") -> AbiomedRLEnv:
     """Construct the standard continuous-action env used for policy evaluation."""
     wm = get_forecast_world_model()
     return AbiomedRLEnv(
         world_model=wm,
         max_steps=6,
         action_space_type="continuous",
-        reward_type="staircase",
+        reward_type=reward_type,
         normalize_rewards=True,
         seed=42,
     )
@@ -505,12 +505,14 @@ def get_policy_evaluation(
 # --- NeurIPS demo: compare two policies' rollouts side by side --------------------------
 # Keys are the dropdown labels on the /neurips-demo page (src/app/pages/NeuripsDemo.jsx).
 POLICY_MODELS = {
-    "CORMPO": "/public/gormpo/models/cormpo.pth",
+    # Same file as GORMPO_abiomed checkpoints/policy/noiseless_synthetic/policy_abiomed.pth.
+    "CORMPO": str(Path(__file__).resolve().parent / "policy_abiomed.pth"),
     "GORMPO-KDE": "/public/gormpo/models/rl/abiomed/kde/seed_42_0313_180343-abiomed_mbpo_kde/policy_abiomed.pth",
     "GORMPO-VAE": "/public/gormpo/models/rl/abiomed/vae/seed_42_0313_180508-abiomed_mbpo_vae/policy_abiomed.pth",
     "GORMPO-RealNVP": "/public/gormpo/models/rl/abiomed/realnvp/seed_42_0310_045907-abiomed_mbpo_realnvp/policy_abiomed.pth",
     "GORMPO-DDPM": "/public/gormpo/models/rl/abiomed/seed_42_0313_181933-abiomed_mbpo_diffusion/policy_abiomed.pth",
-    "GORMPO-NeuralODE": "/public/gormpo/models/rl/abiomed/seed_42_0313_182035-abiomed_mbpo_neuralode/policy_abiomed.pth",
+    # The run the authors evaluated (GORMPO_abiomed cormpo/ope/results_seed_1_0117_032448-*.csv).
+    "GORMPO-NeuralODE": "/public/gormpo/models/rl/abiomed/seed_1_0117_032448-abiomed_mbpo_neuralode/policy_abiomed.pth",
 }
 
 # ponytail: one lock serializes demo runs. The MC-dropout in _compute_forecast flips the shared
@@ -525,14 +527,16 @@ def _get_policy(model: str) -> SACPolicy:
 
 
 @lru_cache(maxsize=1024)
-def _policy_p_levels(patient_id: str, model: str) -> tuple:
-    """P-levels the policy picks on a deterministic 6-hour rollout from the patient's starting state."""
+def _policy_rollout(patient_id: str, model: str) -> tuple[tuple, float]:
+    """P-levels the policy picks on a deterministic 6-hour rollout from the patient's starting state, and its return:
+    the sum of per-step smooth rewards (normalized, lower-clipped at -2, no shaping), exactly the episode_reward
+    GORMPO_abiomed's cormpo/helpers/evaluate.py reports."""
     wm = get_forecast_world_model()
-    env = _build_policy_env()
+    env = _build_policy_env(reward_type="smooth")
     state = _initial_state_tensor(wm, _parse_patient_index(patient_id)).to(wm.device)
     obs, _ = env.reset(options={"state": state})
-    _rollout_sac(_get_policy(model), env, obs, max_steps=6)
-    return tuple(env.episode_actions)
+    _, total_reward, _ = _rollout_sac(_get_policy(model), env, obs, max_steps=6)
+    return tuple(env.episode_actions), total_reward
 
 
 @router.get("/policy_forecast")
@@ -543,11 +547,11 @@ def get_policy_forecast(patient_id: str = Query(...), model: str = Query(...)) -
     pid = patient_id.strip().upper()
     try:
         with _demo_lock:
-            p_levels = _policy_p_levels(pid, model)
+            p_levels, reward = _policy_rollout(pid, model)
             forecast = _compute_forecast(pid, p_levels)
-            # H0 is the level the graph starts at (deviceLevel), then the policy's picks for hours 1-6.
+            # Logged as: last input level (T-10m, deviceLevel), then the policy's picks for hours T0-T5.
             start = get_patients_payload()[_parse_patient_index(pid)]["deviceLevel"]
-            print(f"{model} rollout: {'-'.join(map(str, (start, *p_levels)))}", flush=True)
+            print(f"{model} rollout: {'-'.join(map(str, (start, *p_levels)))} reward={reward:.4f}", flush=True)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except IndexError:
@@ -556,4 +560,4 @@ def get_policy_forecast(patient_id: str = Query(...), model: str = Query(...)) -
         raise HTTPException(status_code=503, detail=f"{model} checkpoint not found: {e.filename}") from e
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"{model} unavailable: {e}") from e
-    return {"patient_id": pid, "model": model, "p_levels": list(p_levels), "forecast": forecast}
+    return {"patient_id": pid, "model": model, "p_levels": list(p_levels), "reward": reward, "forecast": forecast}

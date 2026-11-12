@@ -15,9 +15,9 @@ export const gradientSeverityLinePlugin = {
     if (meta.type !== 'line') return;
 
     const dataset = chart.data.datasets[args.index];
-    const thr = dataset.severityThreshold;
+    const feature = dataset.severityFeature;
     const lineW = dataset.gradientLineWidth;
-    if (thr == null || lineW == null || lineW <= 0) return;
+    if (feature == null || lineW == null || lineW <= 0) return;
 
     const points = meta.data;
     const data = dataset.data;
@@ -46,7 +46,7 @@ export const gradientSeverityLinePlugin = {
       for (let s = 0; s <= STOP_COUNT; s++) {
         const u = s / STOP_COUNT;
         const y = v0 + u * (v1 - v0);
-        g.addColorStop(u, continuousSeverityColor(y, thr));
+        g.addColorStop(u, continuousSeverityColor(y, feature));
       }
 
       ctx.beginPath();

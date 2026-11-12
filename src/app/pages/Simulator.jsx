@@ -8,7 +8,7 @@ import { useTheme, getSurfaces } from '../context/ThemeContext';
 import { useSimulatorContext, emptyPumpSequence } from '../context/SimulatorContext';
 import { featureConfigs, featureKeys, featureDisplayOrder } from '../data/mockData';
 import { CHART_STATUS } from '../constants/chartStatusColors';
-import { continuousSeverityColor } from '../lib/continuousSeverityColor';
+import { continuousSeverityColor, SEVERITY_FEATURES } from '../lib/continuousSeverityColor';
 import { useLayoutContext } from '../components/Layout';
 
 
@@ -32,7 +32,6 @@ function isHourLabel(label) {
 function SimulatorFeatureChart({
  combinedData,
  feature,
- thr,
  hasResult,
  lastHistLabel,
  isDark,
@@ -47,7 +46,7 @@ function SimulatorFeatureChart({
  const labels = useMemo(() => combinedData.map(r => r.label), [combinedData]);
 
 
- const isSeverityColored = ['MAP', 'HR', 'pulsatility'].includes(feature);
+ const isSeverityColored = SEVERITY_FEATURES.includes(feature);
  // A gray slightly darker than the surface subtext, used for non-severity series.
  const plainLineColor = isDark ? '#6B7280' : '#2A3340';
 
@@ -68,7 +67,7 @@ function SimulatorFeatureChart({
      data: histData,
      borderWidth: isSeverityColored ? 0 : 1.5,
      borderColor: isSeverityColored ? undefined : plainLineColor,
-     severityThreshold: isSeverityColored ? thr : null,
+         severityFeature: isSeverityColored ? feature : null,
      gradientLineWidth: isSeverityColored ? 1.5 : 0,
      tension: 0,
      spanGaps: true,
@@ -78,7 +77,7 @@ function SimulatorFeatureChart({
      pointBackgroundColor: ctx => {
        const v = ctx.raw;
        if (v == null || typeof v !== 'number') return 'transparent';
-       return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
+       return isSeverityColored ? continuousSeverityColor(v, feature) : plainLineColor;
      },
      pointBorderColor: ctx => {
        if (!hasResult || labels[ctx.dataIndex]?.startsWith('T')) return plainLineColor;
@@ -88,7 +87,7 @@ function SimulatorFeatureChart({
      pointHoverBackgroundColor: ctx => {
        const v = ctx.raw;
        if (v == null || typeof v !== 'number') return 'transparent';
-       return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
+       return isSeverityColored ? continuousSeverityColor(v, feature) : plainLineColor;
      },
      pointHoverBorderColor: ctx => {
        if (!hasResult || labels[ctx.dataIndex]?.startsWith('T')) return plainLineColor;
@@ -105,7 +104,7 @@ function SimulatorFeatureChart({
          data: foreData,
          borderWidth: isSeverityColored ? 0 : 3,
          borderColor: isSeverityColored ? undefined : plainLineColor,
-         severityThreshold: isSeverityColored ? thr : null,
+         severityFeature: isSeverityColored ? feature : null,
          gradientLineWidth: isSeverityColored ? 3 : 0,
          tension: 0,
          spanGaps: true,
@@ -115,7 +114,7 @@ function SimulatorFeatureChart({
          pointBackgroundColor: ctx => {
            const v = ctx.raw;
            if (v == null || typeof v !== 'number') return 'transparent';
-           return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
+           return isSeverityColored ? continuousSeverityColor(v, feature) : plainLineColor;
          },
          pointBorderColor: ctx => {
            if (!isHourLabel(labels[ctx.dataIndex])) return 'transparent';
@@ -125,7 +124,7 @@ function SimulatorFeatureChart({
          pointHoverBackgroundColor: ctx => {
            const v = ctx.raw;
            if (v == null || typeof v !== 'number') return 'transparent';
-           return isSeverityColored ? continuousSeverityColor(v, thr) : plainLineColor;
+           return isSeverityColored ? continuousSeverityColor(v, feature) : plainLineColor;
          },
          pointHoverBorderColor: ctx => {
            if (!isHourLabel(labels[ctx.dataIndex])) return 'transparent';
@@ -191,7 +190,7 @@ function SimulatorFeatureChart({
       datasets,
       annotations: ann,
     };
-  }, [combinedData, feature, thr, hasResult, histLength, labels, isDark, subtext, isSeverityColored, plainLineColor]);
+  }, [combinedData, feature, hasResult, histLength, labels, isDark, subtext, isSeverityColored, plainLineColor]);
 
   const options = useMemo(
     () => ({
@@ -233,7 +232,7 @@ function SimulatorFeatureChart({
               if (typeof v !== 'number') {
                 return { borderColor: scheme.primary, backgroundColor: scheme.primary };
               }
-              const c = continuousSeverityColor(v, thr);
+              const c = isSeverityColored ? continuousSeverityColor(v, feature) : plainLineColor;
               return { borderColor: c, backgroundColor: c };
             },
           },
@@ -263,7 +262,7 @@ function SimulatorFeatureChart({
         },
       },
     }),
-    [annotations, card, border, subtext, gridColor, scheme.primary, thr, isDark, labels],
+    [annotations, card, border, subtext, gridColor, scheme.primary, feature, isSeverityColored, plainLineColor, isDark, labels],
   );
 
 
@@ -828,7 +827,7 @@ function PLevelConfigChart({
 
 
 export default function Simulator() {
- const { scheme, isDark, thresholds } = useTheme();
+ const { scheme, isDark } = useTheme();
  const { patients, selectedPatientId } = useLayoutContext();
  const {
    getStateFor,
@@ -959,6 +958,7 @@ export default function Simulator() {
  const s = getSurfaces(isDark);
  const bg = s.bg;
  const card = s.card;
+ const header = s.header;
  const border = s.border;
  const text = s.text;
  const subtext = s.subtext;
@@ -1123,7 +1123,7 @@ export default function Simulator() {
  return (
    <div className="flex flex-col h-full overflow-hidden">
      {/* Header */}
-     <div style={{ borderColor: border, background: s.sidebar }} className="border-b px-5 py-3 flex items-center gap-4 flex-shrink-0">
+     <div style={{ borderColor: border, background: card }} className="border-b px-5 py-3 flex items-center gap-4 flex-shrink-0">
        <Sliders size={16} style={{ color: scheme.primary }} />
        <div>
          <h1 style={{ color: text }} className="text-sm font-semibold">Pump Level Simulator</h1>
@@ -1313,7 +1313,6 @@ export default function Simulator() {
          {/* Feature charts */}
          {activeFeatureKeys.map((feature, idx) => {
            const cfg = featureConfigs[feature];
-           const thr = thresholds[feature];
            const trend = getTrend(feature);
            const isGoodDown = ['LVEDP', 'tauLV', 'pumpSpeed', 'motorCurrent'].includes(feature);
            const trendGood = trend
@@ -1360,7 +1359,6 @@ export default function Simulator() {
                    <SimulatorFeatureChart
                      combinedData={combinedData}
                      feature={feature}
-                     thr={thr}
                      hasResult={hasResult}
                      lastHistLabel={lastHistLabel}
                      isDark={isDark}

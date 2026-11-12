@@ -5,7 +5,7 @@ import { Play, Search, X } from 'lucide-react';
 import { useTheme, getSurfaces, getStatusColor } from '../context/ThemeContext';
 import { featureConfigs, featureDisplayOrder } from '../data/mockData';
 import { CHART_STATUS } from '../constants/chartStatusColors';
-import { continuousSeverityColor } from '../lib/continuousSeverityColor';
+import { continuousSeverityColor, SEVERITY_FEATURES } from '../lib/continuousSeverityColor';
 import { useLayoutContext, scoreMatch } from '../components/Layout';
 import { statusConfig } from './MainMenu';
 
@@ -19,9 +19,12 @@ import { statusConfig } from './MainMenu';
 const MODELS = ['CORMPO', 'GORMPO-KDE', 'GORMPO-VAE', 'GORMPO-RealNVP', 'GORMPO-DDPM', 'GORMPO-NeuralODE'];
 // The left-hand model is drawn dashed everywhere (right solid), so the two runs differ by more than color.
 const DASH = [6, 4];
-// What really happened (clinician's P-levels, observed features): a grayish-white baseline, mid-gray on the light theme.
-const clinicianColor = isDark => (isDark ? '#E2E8F0' : '#8B95A7');
-const SEVERITY_FEATURES = ['MAP', 'HR', 'pulsatility'];
+// The clinician's real trajectory is dash-dot everywhere, so it reads apart from both models even when it takes the
+// same severity colors on MAP, HR and pulsatility.
+const DASH_DOT = [12, 5, 2, 5];
+// What really happened (clinician's P-levels, observed features): a dim grayish-white baseline (half the brightness of
+// #E2E8F0) so the model lines pop; on the light theme, half the contrast of #8B95A7 against white.
+const clinicianColor = isDark => (isDark ? '#717478' : '#C5CAD3');
 const API = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? '' : 'http://localhost:8000');
 
 const patientIndex = p => Number(p.id.slice(1));
@@ -96,7 +99,7 @@ function PatientSearch({ patients, loading, selectedId, onSelect, s, scheme }) {
             className="absolute top-full left-0 right-0 mt-1.5 max-h-96 overflow-y-auto rounded-xl border shadow-2xl z-50"
             style={{ background: s.card, borderColor: s.border }}>
             {matches.length === 0 ? (
-              <div className="text-xs px-4 py-3" style={{ color: s.subtext }}>No results found</div>
+              <div className="text-[13px] px-4 py-3" style={{ color: s.subtext }}>No results found</div>
             ) : (
               matches.map((p, idx) => {
                 const sc = getStatusColor(p.status, scheme);
@@ -117,12 +120,12 @@ function PatientSearch({ patients, loading, selectedId, onSelect, s, scheme }) {
                       {p.name}
                     </span>
                     <span
-                      className="text-[11px] px-1.5 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0"
+                      className="text-xs px-1.5 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0"
                       style={{ color: sc, background: sc + '18' }}>
                       {status?.icon}
                       <span>{status?.label}</span>
                     </span>
-                    <span className="text-xs font-mono font-semibold flex-shrink-0" style={{ color: sc }}>
+                    <span className="text-[13px] font-mono font-semibold flex-shrink-0" style={{ color: sc }}>
                       P{p.deviceLevel}
                     </span>
                   </button>
@@ -136,32 +139,37 @@ function PatientSearch({ patients, loading, selectedId, onSelect, s, scheme }) {
   );
 }
 
-/** Display-only P-level rollout: hour 0 is the patient's starting level, hours 1–6 the model's picks.
- *  `clinician` is the real P-level every 10 min from hour 0, drawn behind as the baseline. */
+/** Each level holds from its own time until the next one (left piecewise constant), so the last one is drawn on to
+ *  the end of its step with no dot there.
+ *  `levels`: the model's picks for hours T0…T5 (made from the T-1h…T-10m input hour).
+ *  `clinician`: the real P-level every 10 min from T-1h; the first 6 points are the input hour, so index 6 is T0. */
+const holdLast = (pts, step) => [...pts, { x: pts.at(-1).x + step, y: pts.at(-1).y }];
+
 function PLevelChart({ levels, clinician, dashed, s, scheme, isDark }) {
   const data = useMemo(() => ({
     datasets: [
       ...(clinician
         ? [{
-            data: clinician.map((y, i) => ({ x: i / 6, y })),
+            data: holdLast(clinician.map((y, i) => ({ x: (i - 6) / 6, y })), 1 / 6),
             borderColor: clinicianColor(isDark),
+            borderDash: DASH_DOT,
             borderWidth: 2,
-            stepped: 'before',
+            stepped: 'before', // Chart.js 'before' = hold the previous value until the next point (left piecewise)
             clip: false,
             pointRadius: 0,
           }]
         : []),
       ...(levels
       ? [{
-          data: levels.map((y, x) => ({ x, y })),
+          data: holdLast(levels.map((y, x) => ({ x, y })), 1),
           borderColor: scheme.primary,
           borderWidth: 2,
           borderDash: dashed ? DASH : [],
-          stepped: 'before', // each level holds from its hour to the next (hour 0 = current level, held to hour 1)
+          stepped: 'before', // Chart.js 'before' = hold the previous value until the next point (left piecewise)
           clip: false,
-          pointRadius: 4,
-          pointBackgroundColor: levels.map((_, i) => (i ? scheme.primary : scheme.accent)),
-          pointBorderColor: levels.map((_, i) => (i ? scheme.primary : scheme.accent)),
+          pointRadius: [...levels.map(() => 4), 0],
+          pointBackgroundColor: scheme.primary,
+          pointBorderColor: scheme.primary,
         }]
       : []),
     ],
@@ -176,24 +184,31 @@ function PLevelChart({ levels, clinician, dashed, s, scheme, isDark }) {
     plugins: {
       legend: { display: false },
       tooltip: { enabled: false },
+      // T0 marker, same as the feature charts: the input hour is left of it, the rollouts right.
+      annotation: {
+        common: { drawTime: 'beforeDatasetsDraw' },
+        annotations: {
+          t0: { type: 'line', xMin: 0, xMax: 0, borderColor: s.subtext, borderWidth: 1.25, borderDash: [4, 4] },
+        },
+      },
     },
     scales: {
       x: {
         type: 'linear',
-        min: 0,
+        min: -1,
         max: 6,
         grid: { color: s.gridColor },
         border: { display: false },
-        title: { display: true, text: 'Hour', color: s.subtext, font: { size: 11, weight: '600' } },
-        ticks: { color: s.subtext, font: { size: 11, weight: '500' }, stepSize: 1 },
+        title: { display: true, text: 'Hour', color: s.subtext, font: { size: 14, weight: '600' } },
+        ticks: { color: s.subtext, font: { size: 14, weight: '500' }, stepSize: 1, callback: v => ({ [-1]: 'T-1h', 0: 'T0h' })[v] ?? v },
       },
       y: {
         min: 2,
         max: 9,
         grid: { color: s.gridColor, borderDash: [3, 3] },
         border: { display: false },
-        title: { display: true, text: 'P-level', color: s.subtext, font: { size: 11, weight: '600' } },
-        ticks: { color: s.subtext, font: { size: 10 }, stepSize: 1, autoSkip: false, callback: v => `P${v}` },
+        title: { display: true, text: 'P-level', color: s.subtext, font: { size: 14, weight: '600' } },
+        ticks: { color: s.subtext, font: { size: 13, weight: '500' }, stepSize: 1, autoSkip: false }, // 13: eight labels in a short axis
       },
     },
   }), [s]);
@@ -202,15 +217,21 @@ function PLevelChart({ levels, clinician, dashed, s, scheme, isDark }) {
 }
 
 /** Historical line plus one forecast line (with its ±σ band) per model run; the run-row legend says which line is which. */
-function FeatureChart({ feature, thr, hist, runs, clinician, s, scheme, isDark }) {
+function FeatureChart({ feature, hist, runs, clinician, s, scheme, isDark }) {
   const { data, options } = useMemo(() => {
     const sev = SEVERITY_FEATURES.includes(feature);
     const plain = isDark ? '#6B7280' : '#2A3340';
     const forecasts = runs && hist.length ? runs : [];
     const real = hist.length && clinician ? clinician : [];
-    // Forecast and clinician rows share labels (+10m … Hour 6); the forecast always spans all 6 hours.
-    const labels = [...hist.map(r => r.label), ...(forecasts[0]?.forecast ?? real).map(r => r.label)];
-    const color = v => (typeof v !== 'number' ? 'transparent' : sev ? continuousSeverityColor(v, thr) : plain);
+    // 10-min steps: the input hour is T-1h … -10m, the forecast/clinician rows T0h … +5h50m (the forecast always has
+    // all 36). A trailing empty "Hour 6" slot makes the lines stop one step short of T6, like the P-level charts.
+    const nFuture = (forecasts[0]?.forecast ?? real).length;
+    const labels = [
+      ...hist.map((_, i) => (i ? `-${(hist.length - i) * 10}m` : 'T-1h')),
+      ...Array.from({ length: nFuture }, (_, k) => (!k ? 'T0h' : k % 6 ? `+${(k % 6) * 10}m` : `Hour ${k / 6}`)),
+      ...(nFuture ? ['Hour 6'] : []),
+    ];
+    const color = v => (typeof v !== 'number' ? 'transparent' : sev ? continuousSeverityColor(v, feature) : plain);
     const big = c => isHourLabel(labels[c.dataIndex]);
     const line = (label, values, width, dash, fixed) => ({
       label,
@@ -218,8 +239,8 @@ function FeatureChart({ feature, thr, hist, runs, clinician, s, scheme, isDark }
       borderColor: fixed ?? plain,
       borderWidth: width,
       borderDash: dash,
-      // Severity features: each segment takes the severity color of its midpoint (not the fixed-color clinician line).
-      ...(sev && !fixed && { segment: { borderColor: c => continuousSeverityColor((c.p0.parsed.y + c.p1.parsed.y) / 2, thr) } }),
+      // Severity features: each segment takes the severity color of its midpoint.
+      ...(sev && !fixed && { segment: { borderColor: c => continuousSeverityColor((c.p0.parsed.y + c.p1.parsed.y) / 2, feature) } }),
       tension: 0,
       spanGaps: true,
       pointRadius: c => (big(c) ? 4.5 : 2.5),
@@ -253,7 +274,7 @@ function FeatureChart({ feature, thr, hist, runs, clinician, s, scheme, isDark }
         band(`${run.model} +σ`, series(run, `${feature}_hi`), '-1'),
       ]),
       line('Historical', hist.map(r => r[feature]), 1.5, []),
-      ...(real.length ? [line('Clinician (actual)', [...lead, ...real.map(r => r[feature])], 2.5, [], clinicianColor(isDark))] : []),
+      ...(real.length ? [line('Clinician (actual)', [...lead, ...real.map(r => r[feature])], 2.5, DASH_DOT, sev ? undefined : clinicianColor(isDark))] : []),
       ...forecasts.map((run, i) => line(run.model, series(run, feature), 3, i ? [] : DASH)),
     ];
 
@@ -273,8 +294,8 @@ function FeatureChart({ feature, thr, hist, runs, clinician, s, scheme, isDark }
               ? {
                   forecastStart: {
                     type: 'line',
-                    xMin: hist.length - 1,
-                    xMax: hist.length - 1,
+                    xMin: hist.length, // T0h, the first forecast step
+                    xMax: hist.length,
                     borderColor: s.subtext,
                     borderWidth: 1.25,
                     borderDash: [4, 4],
@@ -305,7 +326,7 @@ function FeatureChart({ feature, thr, hist, runs, clinician, s, scheme, isDark }
             border: { display: false },
             ticks: {
               color: s.subtext,
-              font: { size: 10 },
+              font: { size: 14, weight: '500' },
               maxRotation: 0,
               autoSkip: false,
               callback: (_v, i) => (isHourLabel(labels[i]) ? labels[i] : labels[i] === '+30m' ? '+30 min' : undefined),
@@ -314,18 +335,18 @@ function FeatureChart({ feature, thr, hist, runs, clinician, s, scheme, isDark }
           y: {
             grid: { color: s.gridColor, borderDash: [3, 3] },
             border: { display: false },
-            ticks: { color: s.subtext, font: { size: 10 } },
+            ticks: { color: s.subtext, font: { size: 14, weight: '500' } },
           },
         },
       },
     };
-  }, [feature, thr, hist, runs, clinician, s, scheme, isDark]);
+  }, [feature, hist, runs, clinician, s, scheme, isDark]);
 
   return <Line data={data} options={options} />;
 }
 
 export default function NeuripsDemo() {
-  const { scheme, isDark, thresholds } = useTheme();
+  const { scheme, isDark } = useTheme();
   const { patients, patientsLoading, patientsError, selectedPatient: patient, setSelectedPatientId } = useLayoutContext();
   const s = useMemo(() => getSurfaces(isDark), [isDark]);
 
@@ -375,7 +396,7 @@ export default function NeuripsDemo() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ background: s.bg }}>
-      <header className="flex items-center gap-4 px-5 py-3 border-b flex-shrink-0" style={{ borderColor: s.border }}>
+      <header className="flex items-center gap-4 px-5 py-2 border-b flex-shrink-0" style={{ borderColor: s.border }}>
         <PatientSearch
           patients={patients}
           loading={patientsLoading}
@@ -385,10 +406,10 @@ export default function NeuripsDemo() {
           scheme={scheme}
         />
         {patientsError && (
-          <span role="alert" className="text-xs" style={{ color: scheme.critical }}>{patientsError}</span>
+          <span role="alert" className="text-[13px]" style={{ color: scheme.critical }}>{patientsError}</span>
         )}
         {/* Same pill as the Overview header's "N patients" count. */}
-        <div style={{ background: s.muted, color: s.subtext }} className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap">
+        <div style={{ background: s.muted, color: s.subtext }} className="px-3 py-1.5 rounded-full text-[13px] whitespace-nowrap">
           Index {patient ? patientIndex(patient) : '—'}
         </div>
       </header>
@@ -397,32 +418,43 @@ export default function NeuripsDemo() {
       <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
         <div className="h-full min-w-[900px] flex flex-col">
           <section
-            className="flex-shrink-0 border-b px-5 pt-4 pb-3"
+            className="flex-shrink-0 border-b px-5 pt-3 pb-3"
             style={{ background: s.sidebar, borderColor: s.border }}>
-            <div className="flex gap-3" style={{ height: 250 }}>
+            {/* Grows with the screen (234px on a 14" MacBook Pro, 266px on a 16"); the feature cards below take what's left. */}
+            <div className="flex gap-3" style={{ height: 'clamp(213px, 23.8vh, 272px)' }}>
               {[0, 1].map(i => (
                 <div
                   key={i}
                   className="flex-1 min-w-0 rounded-2xl border-2 flex flex-col px-3 py-2"
                   style={{ background: s.sidebar, borderColor: s.border }}>
-                  <select
-                    value={models[i]}
-                    onChange={e => {
-                      const m = e.target.value;
-                      setModels(prev => (i ? [prev[0], m] : [m, prev[1]]));
-                    }}
-                    aria-label={`Model for the ${i ? 'right' : 'left'} graph`}
-                    className="self-start mb-1.5 px-2.5 py-2 rounded-lg border text-sm font-semibold cursor-pointer"
-                    style={{ background: s.inputBg, color: s.text, borderColor: s.border, colorScheme: isDark ? 'dark' : 'light' }}>
-                    <option value="" disabled>Select model…</option>
-                    {MODELS.map(m => (
-                      <option key={m} value={m} disabled={m === models[1 - i]}>{m}</option>
-                    ))}
-                  </select>
+                  {/* Model picker top-left, the rollout's total reward top-right on the same row. */}
+                  <div className="flex items-center justify-between gap-3 mb-1">
+                    <select
+                      value={models[i]}
+                      onChange={e => {
+                        const m = e.target.value;
+                        setModels(prev => (i ? [prev[0], m] : [m, prev[1]]));
+                      }}
+                      aria-label={`Model for the ${i ? 'right' : 'left'} graph`}
+                      className="px-2.5 py-1 rounded-lg border text-[15px] font-semibold cursor-pointer"
+                      style={{ background: s.inputBg, color: s.text, borderColor: s.border, colorScheme: isDark ? 'dark' : 'light' }}>
+                      <option value="" disabled>Select model…</option>
+                      {MODELS.map(m => (
+                        <option key={m} value={m} disabled={m === models[1 - i]}>{m}</option>
+                      ))}
+                    </select>
+                    {runs?.[i]?.reward != null && (
+                      <span
+                        className="px-3 py-1 rounded-full border text-base font-semibold whitespace-nowrap tabular-nums"
+                        style={{ background: s.muted, borderColor: s.border, color: s.text }}>
+                        Reward: {runs[i].reward.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex-1 min-h-0 relative">
                     <PLevelChart
-                      levels={runs && patient ? [patient.deviceLevel, ...runs[i].p_levels] : null}
-                      clinician={clinician && patient ? [patient.deviceLevel, ...clinician.map(r => Math.round(r.tauLV))] : null}
+                      levels={runs ? runs[i].p_levels : null}
+                      clinician={hist.length ? [...hist.map(r => r.tauLV), ...(clinician ?? []).map(r => r.tauLV)] : null}
                       dashed={i === 0}
                       s={s}
                       scheme={scheme}
@@ -433,14 +465,17 @@ export default function NeuripsDemo() {
               ))}
             </div>
 
-            {/* Run button centered under the graphs; severity scale, then the line-style legend flush right, in the same
-                row (they wrap onto two lines rather than push the button off-center when the row is narrow). */}
-            <div className="grid grid-cols-[1fr_auto_1fr] items-center mt-3 pb-2">
+          </section>
+
+          {/* Between the graph box and the feature cards, on the page background: line legend left, Run button
+              centered, severity scale right. */}
+          <div className="flex-shrink-0 px-5 pt-3">
+            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-x-6 pb-2">
               <button
                 type="button"
                 onClick={runForecast}
                 disabled={!ready || running}
-                className="col-start-2 px-4 py-2 rounded-lg border font-semibold text-sm flex items-center gap-2 transition-all disabled:cursor-not-allowed"
+                className="col-start-2 row-start-1 px-4 py-2 rounded-lg border font-semibold text-[15px] flex items-center gap-2 transition-all disabled:cursor-not-allowed"
                 style={{
                   background: ready ? scheme.primary : s.muted,
                   color: ready ? 'white' : s.subtext,
@@ -454,70 +489,66 @@ export default function NeuripsDemo() {
                 </motion.div>
                 {running ? 'Simulating…' : 'Run forecast'}
               </button>
-              {/* gap-y-7 clears the bar's hanging labels if the legend ever wraps under it. */}
-              <div className="justify-self-end flex flex-wrap items-center justify-end gap-x-10 gap-y-7">
-                {/* Only the bar is in flow, so it centers on the legend; the labels hang below it. */}
-                <div className="relative w-56">
-                  <div
-                    className="h-2.5 rounded-full"
-                    style={{
-                      background: `linear-gradient(to right, ${CHART_STATUS.normal}, ${CHART_STATUS.warning}, ${CHART_STATUS.critical})`,
-                    }}
-                  />
-                  <div
-                    className="absolute left-0 right-0 top-full mt-1 flex justify-between text-xs font-medium"
-                    style={{ color: s.subtext }}>
-                    <span>Normal</span>
-                    <span>Warning</span>
-                    <span>Critical</span>
-                  </div>
+              {(clinician || models.some(Boolean)) && (
+                <div className="col-start-1 row-start-1 justify-self-start flex flex-wrap items-center gap-x-5 gap-y-1">
+                  {clinician && (
+                    <span className="flex items-center gap-2 text-[15px] font-semibold whitespace-nowrap" style={{ color: s.text }}>
+                      <svg width="34" height="5" aria-hidden>
+                        <line x1="0" y1="2.5" x2="34" y2="2.5" stroke={s.text} strokeWidth="4" strokeDasharray={DASH_DOT.join(' ')} />
+                      </svg>
+                      Clinician (actual)
+                    </span>
+                  )}
+                  {models.map((m, i) => m && (
+                    <span key={i} className="flex items-center gap-2 text-[15px] font-semibold whitespace-nowrap" style={{ color: s.text }}>
+                      <svg width="34" height="5" aria-hidden>
+                        <line x1="0" y1="2.5" x2="34" y2="2.5" stroke={s.text} strokeWidth="4" strokeDasharray={i ? undefined : DASH.join(' ')} />
+                      </svg>
+                      {m}
+                    </span>
+                  ))}
                 </div>
-                {/* Which line is which model: left model dashed, right model solid, same as every graph. Flush right. */}
-                {(clinician || models.some(Boolean)) && (
-                  <div className="flex items-center gap-4">
-                    {clinician && (
-                      <span className="flex items-center gap-1.5 text-xs font-medium whitespace-nowrap" style={{ color: s.text }}>
-                        <svg width="26" height="4" aria-hidden>
-                          <line x1="0" y1="2" x2="26" y2="2" stroke={clinicianColor(isDark)} strokeWidth="3" />
-                        </svg>
-                        Clinician (actual)
-                      </span>
-                    )}
-                    {models.map((m, i) => m && (
-                      <span key={i} className="flex items-center gap-1.5 text-xs font-medium whitespace-nowrap" style={{ color: s.text }}>
-                        <svg width="26" height="4" aria-hidden>
-                          <line x1="0" y1="2" x2="26" y2="2" stroke={s.subtext} strokeWidth="3" strokeDasharray={i ? undefined : DASH.join(' ')} />
-                        </svg>
-                        {m}
-                      </span>
-                    ))}
-                  </div>
-                )}
+              )}
+              <div className="col-start-3 row-start-1 justify-self-end relative w-56">
+                <div
+                  className="h-2.5 rounded-full"
+                  style={{
+                    background: `linear-gradient(to right, ${CHART_STATUS.normal}, ${CHART_STATUS.warning}, ${CHART_STATUS.critical})`,
+                  }}
+                />
+                <div
+                  className="absolute left-0 right-0 top-full mt-1 flex justify-between text-[13px] font-medium"
+                  style={{ color: s.subtext }}>
+                  <span>Normal</span>
+                  <span>Warning</span>
+                  <span>Critical</span>
+                </div>
               </div>
             </div>
             {error && (
-              <p role="alert" className="text-xs text-center mt-1.5" style={{ color: scheme.critical }}>{error}</p>
+              <p role="alert" className="text-[13px] text-center mt-1.5" style={{ color: scheme.critical }}>{error}</p>
             )}
-          </section>
+          </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Each card takes a third of the scroll area (minus the two 12px gaps), so the header, P-level graphs and
+              MAP, HR and pulsatility fill exactly one screen; minHeight keeps short windows scrolling instead of squashing. */}
+          <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
             {featureDisplayOrder.map(feature => {
               const cfg = featureConfigs[feature];
               return (
                 <div
                   key={feature}
-                  className="rounded-xl border"
-                  style={{ background: s.sidebar, borderColor: s.border }}>
-                  <div className="flex items-center gap-2 px-4 py-2.5 border-b" style={{ borderColor: s.border }}>
+                  className="rounded-xl border flex flex-col"
+                  style={{ background: s.sidebar, borderColor: s.border, height: 'calc((100% - 24px) / 3)', minHeight: 170 }}>
+                  <div className="flex items-center gap-2 px-4 py-1.5 border-b" style={{ borderColor: s.border }}>
                     <div className="w-2.5 h-2.5 rounded-full" style={{ background: cfg.color }} />
-                    <span className="text-sm font-semibold" style={{ color: s.text }}>{cfg.label}</span>
-                    <span className="text-xs" style={{ color: s.subtext }}>({cfg.unit})</span>
+                    <span className="text-lg font-semibold" style={{ color: s.text }}>{cfg.label}</span>
+                    <span className="text-base" style={{ color: s.subtext }}>({cfg.unit})</span>
                   </div>
-                  <div className="px-2 pt-3 pb-2">
-                    <div className="relative w-full" style={{ height: 170 }}>
+                  <div className="flex-1 min-h-0 px-2 pt-2 pb-1">
+                    <div className="relative w-full h-full">
                       <FeatureChart
                         feature={feature}
-                        thr={thresholds[feature]}
                         hist={hist}
                         runs={runs}
                         clinician={clinician}
