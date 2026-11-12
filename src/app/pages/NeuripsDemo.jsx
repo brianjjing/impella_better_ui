@@ -386,11 +386,9 @@ export default function NeuripsDemo() {
         {patientsError && (
           <span role="alert" className="text-xs" style={{ color: scheme.critical }}>{patientsError}</span>
         )}
-        <div className="ml-auto flex items-baseline gap-2 whitespace-nowrap">
-          <span className="text-xs" style={{ color: s.subtext }}>Index</span>
-          <span className="text-sm font-semibold font-mono" style={{ color: s.text }}>
-            {patient ? patientIndex(patient) : '—'}
-          </span>
+        {/* Same pill as the Overview header's "N patients" count. */}
+        <div style={{ background: s.muted, color: s.subtext }} className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap">
+          Index {patient ? patientIndex(patient) : '—'}
         </div>
       </header>
 
@@ -433,7 +431,7 @@ export default function NeuripsDemo() {
             </div>
 
             {/* Run button centered under the graphs; severity legend at the right of the same row. */}
-            <div className="grid grid-cols-[1fr_auto_1fr] items-center mt-3">
+            <div className="grid grid-cols-[1fr_auto_1fr] items-center mt-3 pb-2">
               <button
                 type="button"
                 onClick={runForecast}
@@ -456,14 +454,17 @@ export default function NeuripsDemo() {
                 <span className="text-xs uppercase tracking-widest font-semibold" style={{ color: s.subtext }}>
                   Severity
                 </span>
-                <div className="w-56">
+                {/* Only the bar is in flow, so it centers on the SEVERITY text; the labels hang below it. */}
+                <div className="relative w-56">
                   <div
                     className="h-2.5 rounded-full"
                     style={{
                       background: `linear-gradient(to right, ${CHART_STATUS.normal}, ${CHART_STATUS.warning}, ${CHART_STATUS.critical})`,
                     }}
                   />
-                  <div className="flex justify-between mt-1 text-xs font-medium" style={{ color: s.subtext }}>
+                  <div
+                    className="absolute left-0 right-0 top-full mt-1 flex justify-between text-xs font-medium"
+                    style={{ color: s.subtext }}>
                     <span>Normal</span>
                     <span>Warning</span>
                     <span>Critical</span>
